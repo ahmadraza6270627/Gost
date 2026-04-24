@@ -6,6 +6,8 @@ import { routers } from "./startup/routers.js";
 
 const app = express()
 
+app.set('trust proxy', 1)
+
 routers(app)
 db()
 _config()
