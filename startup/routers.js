@@ -12,7 +12,11 @@ import session from "express-session";
 import rateLimit from "express-rate-limit";
 
 export function routers(app) {
-    const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173'
+  const clientOrigin = [
+    'https://gost-five.vercel.app',
+    'http://localhost:5173',
+    process.env.CLIENT_ORIGIN
+].filter(Boolean)
 
     if (!process.env.SESSION_SECRET) throw new Error('SESSION_SECRET is not set!')
 
