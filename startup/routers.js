@@ -12,11 +12,6 @@ import session from "express-session";
 import rateLimit from "express-rate-limit";
 
 export function routers(app) {
-  const clientOrigin = [
-    'https://gost-five.vercel.app',
-    'http://localhost:5173',
-    process.env.CLIENT_ORIGIN
-].filter(Boolean)
 
     if (!process.env.SESSION_SECRET) throw new Error('SESSION_SECRET is not set!')
 
@@ -26,10 +21,21 @@ export function routers(app) {
         message: 'Too many login attempts, please try again later'
     })
 
-    app.use(cors({
-        origin: clientOrigin,
-        credentials: true
-    }));
+    app.options('*', (req, res) => {
+        res.header('Access-Control-Allow-Origin', 'https://gost-five.vercel.app');
+        res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.header('Access-Control-Allow-Credentials', 'true');
+        res.sendStatus(200);
+    });
+
+    const clientOrigin = [
+        'https://gost-five.vercel.app',
+        'http://localhost:5173',
+        process.env.CLIENT_ORIGIN
+    ].filter(Boolean)
+
+    app.use(cors({ origin: clientOrigin, credentials: true }));
     app.use(express.static(path.resolve("views")));
     app.use(express.json());
 
@@ -60,7 +66,6 @@ export function routers(app) {
         res.sendFile(path.resolve("./p2p.html"));
     });
 
-    // ✅ Correct session check — uses sessionId from sessionStorage
     app.post('/api/check-session', async (req, res) => {
         try {
             const { sessionId } = req.body
@@ -72,7 +77,6 @@ export function routers(app) {
         }
     })
 
-    // ── Message persistence ──────────────────────────────────────────────────
     app.post('/messages', async (req, res) => {
         try {
             const { topic, peerId, message } = req.body;
