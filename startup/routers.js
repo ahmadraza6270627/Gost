@@ -6,7 +6,6 @@ import { homepage } from '../routers/home_page.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { Message } from '../models/messaging.js';
 import express from "express";
-import cors from "cors";
 import path from "path";
 import session from "express-session";
 import rateLimit from "express-rate-limit";
@@ -21,21 +20,18 @@ export function routers(app) {
         message: 'Too many login attempts, please try again later'
     })
 
-    app.options('*', (req, res) => {
+    // Manual CORS - handles everything including preflight
+    app.use((req, res, next) => {
         res.header('Access-Control-Allow-Origin', 'https://gost-five.vercel.app');
         res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
         res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
         res.header('Access-Control-Allow-Credentials', 'true');
-        res.sendStatus(200);
+        if (req.method === 'OPTIONS') {
+            return res.sendStatus(200);
+        }
+        next();
     });
 
-    const clientOrigin = [
-        'https://gost-five.vercel.app',
-        'http://localhost:5173',
-        process.env.CLIENT_ORIGIN
-    ].filter(Boolean)
-
-    app.use(cors({ origin: clientOrigin, credentials: true }));
     app.use(express.static(path.resolve("views")));
     app.use(express.json());
 
