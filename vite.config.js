@@ -1,6 +1,14 @@
+import { resolve } from 'path'
+
 export default {
   build: {
-    target: 'es2022'
+    target: 'es2022',
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        p2p: resolve(__dirname, 'p2p.html')
+      }
+    }
   },
   optimizeDeps: {
     esbuildOptions: { target: 'es2022', supported: { bigint: true } }
@@ -13,5 +21,5 @@ export default {
       '/api':      { target: process.env.VITE_API_URL || 'http://localhost:5000', changeOrigin: true },
       '/messages': { target: process.env.VITE_API_URL || 'http://localhost:5000', changeOrigin: true },
     }
-}
+  }
 }
