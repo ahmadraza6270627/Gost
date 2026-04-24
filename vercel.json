@@ -1,6 +1,5 @@
 {
   "rewrites": [
-    { "source": "/p2p.html", "destination": "/p2p.html" },
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/(.*)", "destination": "/$1" }
   ]
 }
