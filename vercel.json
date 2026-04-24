@@ -1,4 +1,8 @@
 {
   "cleanUrls": false,
-  "trailingSlash": false
+  "trailingSlash": false,
+  "rewrites": [
+    { "source": "/p2p.html", "destination": "/p2p.html" },
+    { "source": "/index.html", "destination": "/index.html" }
+  ]
 }
