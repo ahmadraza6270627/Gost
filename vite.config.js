@@ -8,10 +8,10 @@ export default {
   server: {
     open: true,
     proxy: {
-      '/auth':              { target: 'http://localhost:5000', changeOrigin: true },
-      '/user':              { target: 'http://localhost:5000', changeOrigin: true },
-      '/api':               { target: 'http://localhost:5000', changeOrigin: true },
-      '/messages':          { target: 'http://localhost:5000', changeOrigin: true },
+      '/auth':     { target: process.env.VITE_API_URL || 'http://localhost:5000', changeOrigin: true },
+      '/user':     { target: process.env.VITE_API_URL || 'http://localhost:5000', changeOrigin: true },
+      '/api':      { target: process.env.VITE_API_URL || 'http://localhost:5000', changeOrigin: true },
+      '/messages': { target: process.env.VITE_API_URL || 'http://localhost:5000', changeOrigin: true },
     }
 }
 }
