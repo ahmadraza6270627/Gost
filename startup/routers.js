@@ -31,7 +31,6 @@ export function routers(app) {
         credentials: true
     }));
     app.use(express.static(path.resolve("views")));
-    app.set("view engine", "pug");
     app.use(express.json());
 
     app.use(session({
