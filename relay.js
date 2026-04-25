@@ -9,10 +9,15 @@ import { createLibp2p } from 'libp2p'
 import http from 'http'
 
 const RELAY_HOST = process.env.RELAY_HOST || '0.0.0.0'
+const RELAY_HTTP_PORT = process.env.PORT || 4001
+const RELAY_PUBLIC_HOST = process.env.RAILWAY_PUBLIC_DOMAIN || 'localhost'
+const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'https://gost-five.vercel.app'
 
+// libp2p uses a random port for WebSocket transport
 const server = await createLibp2p({
   addresses: {
-    listen: [`/ip4/${RELAY_HOST}/tcp/0/ws`]
+    listen: [`/ip4/${RELAY_HOST}/tcp/0/ws`],
+    announce: [`/dns4/${RELAY_PUBLIC_HOST}/tcp/443/wss`]
   },
   transports: [webSockets({ filter: filters.all })],
   connectionEncryption: [noise()],
@@ -28,8 +33,6 @@ const relayMultiaddrs = server.getMultiaddrs().map(ma => ma.toString())
 console.log('Relay listening on:', relayMultiaddrs)
 
 const topicPeers = {}
-const RELAY_HTTP_PORT = process.env.RELAY_HTTP_PORT || 4001
-const CLIENT_ORIGIN   = process.env.CLIENT_ORIGIN   || 'http://localhost:5173'
 
 const httpServer = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', CLIENT_ORIGIN)

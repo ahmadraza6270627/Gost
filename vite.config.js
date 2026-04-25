@@ -1,4 +1,9 @@
 import { resolve } from 'path'
+import { fileURLToPath } from 'url'
+import { dirname } from 'path'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
 
 export default {
   build: {
@@ -16,10 +21,10 @@ export default {
   server: {
     open: true,
     proxy: {
-      '/auth':     { target: process.env.VITE_API_URL || 'http://localhost:5000', changeOrigin: true },
-      '/user':     { target: process.env.VITE_API_URL || 'http://localhost:5000', changeOrigin: true },
-      '/api':      { target: process.env.VITE_API_URL || 'http://localhost:5000', changeOrigin: true },
-      '/messages': { target: process.env.VITE_API_URL || 'http://localhost:5000', changeOrigin: true },
+      '/auth':     { target: 'http://localhost:5000', changeOrigin: true },
+      '/user':     { target: 'http://localhost:5000', changeOrigin: true },
+      '/api':      { target: 'http://localhost:5000', changeOrigin: true },
+      '/messages': { target: 'http://localhost:5000', changeOrigin: true },
     }
   }
 }

@@ -22,19 +22,19 @@ const MESSAGES_API = import.meta.env.VITE_API_URL   || 'http://localhost:5000'
 
 // ── DOM helpers ────────────────────────────────────────────────────────────────
 const DOM = {
-  peerId:              () => document.getElementById('peer-id'),
-  topicInput:          () => document.getElementById('topic-input'),
-  subscribeButton:     () => document.getElementById('subscribe-button'),
-  messageInput:        () => document.getElementById('message-input'),
-  sendButton:          () => document.getElementById('send-button'),
-  output:              () => document.getElementById('output'),
-  statusDot:           () => document.getElementById('status-dot'),
-  statusText:          () => document.getElementById('status-text'),
-  topicPeerList:       () => document.getElementById('topic-peers'),
-  currentTopic:        () => document.getElementById('current-topic'),
+  peerId:          () => document.getElementById('peer-id'),
+  topicInput:      () => document.getElementById('topic-input'),
+  subscribeButton: () => document.getElementById('subscribe-button'),
+  messageInput:    () => document.getElementById('message-input'),
+  sendButton:      () => document.getElementById('send-button'),
+  output:          () => document.getElementById('output'),
+  statusDot:       () => document.getElementById('status-dot'),
+  statusText:      () => document.getElementById('status-text'),
+  topicPeerList:   () => document.getElementById('topic-peers'),
+  currentTopic:    () => document.getElementById('current-topic'),
 }
 
-// ── Clean log — only shows what matters to the user ───────────────────────────
+// ── Clean log ─────────────────────────────────────────────────────────────────
 const log = (line, type = 'info') => {
   if (window.addLog) {
     window.addLog(line, type)
@@ -82,7 +82,7 @@ if (window.setPeerId) {
   DOM.peerId().textContent = libp2p.peerId.toString()
 }
 
-// ── Peer joined/left notifications only ───────────────────────────────────────
+// ── Peer joined/left notifications ────────────────────────────────────────────
 libp2p.addEventListener('connection:open', () => {
   if (currentTopic) {
     setStatus('connected', `Connected — topic: ${currentTopic}`)
@@ -114,13 +114,22 @@ DOM.subscribeButton().onclick = async () => {
   setStatus('connecting', 'Connecting…')
 
   try {
-    // Fetch relay address
+    // Fetch relay addresses
     const relayRes = await fetch(`${RELAY_API}/relay`)
     const { multiaddrs: relayAddrs } = await relayRes.json()
     if (!relayAddrs || relayAddrs.length === 0) throw new Error('Relay unavailable')
 
-    // Connect to relay
-    await libp2p.dial(multiaddr(relayAddrs[0]))
+    // Try all relay addresses until one works
+    let connected = false
+    for (const addr of relayAddrs) {
+      try {
+        await libp2p.dial(multiaddr(addr))
+        connected = true
+        break
+      } catch { /* try next */ }
+    }
+    if (!connected) throw new Error('Could not connect to relay')
+
     setStatus('relay', 'Setting up secure connection…')
 
     // Wait for WebRTC address
@@ -134,7 +143,7 @@ DOM.subscribeButton().onclick = async () => {
       body: JSON.stringify({ topic, peerId: libp2p.peerId.toString(), multiaddrs: myAddrs })
     })
 
-    // Find and connect to existing peers silently
+    // Find and connect to existing peers
     const peersRes = await fetch(
       `${RELAY_API}/peers?topic=${encodeURIComponent(topic)}&exclude=${libp2p.peerId.toString()}`
     )
@@ -144,7 +153,6 @@ DOM.subscribeButton().onclick = async () => {
       setStatus('waiting', 'Waiting for others to join…')
       log('You are the first one here. Share the topic name to invite others.', 'info')
     } else {
-      // Try to connect to peers silently — no dialing logs shown to user
       for (const peer of peers) {
         const addrs = [
           ...peer.multiaddrs.filter(a => a.includes('/webrtc') || a.includes('/p2p-circuit')),
@@ -227,12 +235,11 @@ DOM.sendButton().onclick = async () => {
     log(`You: ${message}`, 'sent')
     DOM.messageInput().value = ''
 
-    // Persist to MongoDB
     await fetch(`${MESSAGES_API}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ topic, peerId: libp2p.peerId.toString(), message })
-    }).catch(() => { /* silent — don't show DB errors to user */ })
+    }).catch(() => {})
 
   } catch (err) {
     log('Message failed to send. Are you connected?', 'error')

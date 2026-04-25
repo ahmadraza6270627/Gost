@@ -1,5 +1,1 @@
-
-
-export function _config(app) {
-
-}
+export function _config() {}
