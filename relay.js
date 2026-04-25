@@ -16,7 +16,7 @@ const RELAY_TCP_PORT = process.env.RELAY_TCP_PORT || '42924'
 const server = await createLibp2p({
   addresses: {
     listen: [`/ip4/${RELAY_HOST}/tcp/0/ws`],
-    announce: [`/dns4/${RELAY_TCP_HOST}/tcp/${RELAY_TCP_PORT}/ws`]
+    announce: [`/dns4/${RELAY_TCP_HOST}/tcp/${RELAY_TCP_PORT}/wss`]
   },
   transports: [webSockets({ filter: filters.all })],
   connectionEncryption: [noise()],
