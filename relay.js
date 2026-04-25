@@ -12,11 +12,10 @@ const RELAY_HOST = process.env.RELAY_HOST || '0.0.0.0'
 const RELAY_HTTP_PORT = process.env.PORT || 4001
 const RELAY_TCP_HOST = process.env.RELAY_TCP_HOST || 'shuttle.proxy.rlwy.net'
 const RELAY_TCP_PORT = process.env.RELAY_TCP_PORT || '42924'
-const RELAY_WS_PORT = process.env.RELAY_WS_PORT || '36001'
 
 const server = await createLibp2p({
   addresses: {
-    listen: [`/ip4/${RELAY_HOST}/tcp/${RELAY_WS_PORT}/ws`],
+    listen: [`/ip4/${RELAY_HOST}/tcp/0/ws`],
     announce: [`/dns4/${RELAY_TCP_HOST}/tcp/${RELAY_TCP_PORT}/ws`]
   },
   transports: [webSockets({ filter: filters.all })],
