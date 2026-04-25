@@ -8,27 +8,27 @@ import * as filters from '@libp2p/websockets/filters'
 import { createLibp2p } from 'libp2p'
 import http from 'http'
 
-const RELAY_HOST = process.env.RELAY_HOST || '0.0.0.0'
-const RELAY_HTTP_PORT = process.env.PORT || 4001
-const RELAY_TCP_HOST = process.env.RELAY_TCP_HOST || 'shuttle.proxy.rlwy.net'
-const RELAY_TCP_PORT = process.env.RELAY_TCP_PORT || '42924'
+const RELAY_HOST      = process.env.RELAY_HOST     || '0.0.0.0'
+const RELAY_HTTP_PORT = process.env.PORT            || 8080   // HTTP API
+const RELAY_WS_PORT   = process.env.RELAY_WS_PORT  || 8081   // libp2p WebSocket (fixed)
+const RELAY_TCP_HOST  = process.env.RELAY_TCP_HOST || 'shuttle.proxy.rlwy.net'
+const RELAY_TCP_PORT  = process.env.RELAY_TCP_PORT || '42924'
 
 const server = await createLibp2p({
   addresses: {
-    listen: [`/ip4/${RELAY_HOST}/tcp/0/ws`],
+    listen:   [`/ip4/${RELAY_HOST}/tcp/${RELAY_WS_PORT}/ws`],
     announce: [`/dns4/${RELAY_TCP_HOST}/tcp/${RELAY_TCP_PORT}/wss`]
   },
-  transports: [webSockets({ filter: filters.all })],
+  transports:           [webSockets({ filter: filters.all })],
   connectionEncryption: [noise()],
-  streamMuxers: [yamux(), mplex()],
+  streamMuxers:         [yamux(), mplex()],
   services: {
     identify: identify(),
-    relay: circuitRelayServer({ reservations: { maxReservations: Infinity } })
+    relay:    circuitRelayServer({ reservations: { maxReservations: Infinity } })
   },
   connectionManager: { minConnections: 0 }
 })
 
-// ✅ FIX 1: Start the libp2p node before reading multiaddrs
 await server.start()
 
 const relayMultiaddrs = server.getMultiaddrs().map(ma => ma.toString())
@@ -37,7 +37,6 @@ console.log('Relay listening on:', relayMultiaddrs)
 const topicPeers = {}
 
 const httpServer = http.createServer((req, res) => {
-  // ✅ FIX 2: Allow all origins for now (lock down after testing)
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
@@ -53,7 +52,7 @@ const httpServer = http.createServer((req, res) => {
   }
 
   if (req.method === 'GET' && url.pathname === '/peers') {
-    const topic = url.searchParams.get('topic')
+    const topic   = url.searchParams.get('topic')
     const exclude = url.searchParams.get('exclude')
     if (!topic) { res.writeHead(400); res.end('missing topic'); return }
     const peers = (topicPeers[topic] || []).filter(p => p.peerId !== exclude)
