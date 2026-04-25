@@ -8,34 +8,11 @@ import * as filters from '@libp2p/websockets/filters'
 import { createLibp2p } from 'libp2p'
 import http from 'http'
 
-const RELAY_HOST      = process.env.RELAY_HOST     || '0.0.0.0'
-const RELAY_HTTP_PORT = process.env.PORT            || 8080   // HTTP API
-const RELAY_WS_PORT   = process.env.RELAY_WS_PORT  || 8081   // libp2p WebSocket (fixed)
-const RELAY_TCP_HOST  = process.env.RELAY_TCP_HOST || 'shuttle.proxy.rlwy.net'
-const RELAY_TCP_PORT  = process.env.RELAY_TCP_PORT || '42924'
+const RELAY_HOST      = process.env.RELAY_HOST              || '0.0.0.0'
+const PORT            = process.env.PORT                    || 8080
+const PUBLIC_DOMAIN   = process.env.RAILWAY_PUBLIC_DOMAIN   || 'localhost'
 
-const server = await createLibp2p({
-  addresses: {
-    listen:   [`/ip4/${RELAY_HOST}/tcp/${RELAY_WS_PORT}/ws`],
-    announce: [`/dns4/${RELAY_TCP_HOST}/tcp/${RELAY_TCP_PORT}/wss`]
-  },
-  transports:           [webSockets({ filter: filters.all })],
-  connectionEncryption: [noise()],
-  streamMuxers:         [yamux(), mplex()],
-  services: {
-    identify: identify(),
-    relay:    circuitRelayServer({ reservations: { maxReservations: Infinity } })
-  },
-  connectionManager: { minConnections: 0 }
-})
-
-await server.start()
-
-const relayMultiaddrs = server.getMultiaddrs().map(ma => ma.toString())
-console.log('Relay listening on:', relayMultiaddrs)
-
-const topicPeers = {}
-
+// ── Single HTTP server shared by libp2p WS + REST API ─────────────────────────
 const httpServer = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
@@ -43,11 +20,12 @@ const httpServer = http.createServer((req, res) => {
 
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
 
-  const url = new URL(req.url, `http://localhost:${RELAY_HTTP_PORT}`)
+  const url = new URL(req.url, `http://localhost:${PORT}`)
 
   if (req.method === 'GET' && url.pathname === '/relay') {
+    const multiaddrs = server.getMultiaddrs().map(ma => ma.toString())
     res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ multiaddrs: relayMultiaddrs }))
+    res.end(JSON.stringify({ multiaddrs }))
     return
   }
 
@@ -83,6 +61,33 @@ const httpServer = http.createServer((req, res) => {
   res.writeHead(404); res.end('not found')
 })
 
-httpServer.listen(RELAY_HTTP_PORT, () => {
-  console.log(`Relay HTTP API → port ${RELAY_HTTP_PORT}`)
+const topicPeers = {}
+
+// Start HTTP server first, then pass it to libp2p
+httpServer.listen(PORT, RELAY_HOST, async () => {
+  console.log(`HTTP API → port ${PORT}`)
 })
+
+// ── libp2p relay — shares the same HTTP server for WebSocket upgrade ──────────
+const server = await createLibp2p({
+  addresses: {
+    listen:   [`/ip4/${RELAY_HOST}/tcp/${PORT}/ws`],
+    announce: [`/dns4/${PUBLIC_DOMAIN}/tcp/443/wss`]
+  },
+  transports: [webSockets({
+    filter: filters.all,
+    server: httpServer   // ← share the HTTP server
+  })],
+  connectionEncryption: [noise()],
+  streamMuxers:         [yamux(), mplex()],
+  services: {
+    identify: identify(),
+    relay:    circuitRelayServer({ reservations: { maxReservations: Infinity } })
+  },
+  connectionManager: { minConnections: 0 }
+})
+
+await server.start()
+
+const relayMultiaddrs = server.getMultiaddrs().map(ma => ma.toString())
+console.log('Relay listening on:', relayMultiaddrs)
