@@ -3,13 +3,15 @@
   "version": "1.0.0",
   "description": "",
   "type": "module",
-  "main": "index.js",
+  "main": "app.js",
   "scripts": {
-    "dev": "concurrently \"npm run app\" \"npm run frontend\" \"npm run relay\"",
+    "start": "node app.js",
+    "start:relay": "node relay.js",
+    "dev": "concurrently \"npm run app\" \"npm run relay\" \"npm run frontend\"",
     "app": "node -r dotenv/config app.js",
+    "relay": "node relay.js",
     "frontend": "vite",
     "build": "vite build",
-    "relay": "node relay.js",
     "test:chrome": "npm run dev && playwright test test",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
