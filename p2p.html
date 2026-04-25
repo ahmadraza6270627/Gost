@@ -619,11 +619,8 @@
   const NO_PEER_KEYWORDS = ['no peer', 'no peers', 'not connected', 'nobody connected', 'peer not connected'];
 
   window.addLog = function(text, type = 'info') {
-    if (type === 'error') {
-      const lower = text.toLowerCase();
-      const isPeerError = NO_PEER_KEYWORDS.some(k => lower.includes(k));
-      if (!isPeerError) return;
-    }
+    // Show all messages — previously errors were silently filtered which
+    // made it impossible to see what was going wrong.
 
     const line = document.createElement('div');
     line.className = 'log-line log-' + type;

@@ -70,13 +70,13 @@ const libp2p = await createLibp2p({
   services: {
     identify: identify(),
     pubsub: gossipsub({
-      allowPublishToZeroPeers: true, // send even if mesh isn't fully formed
-      D: 2,                          // mesh target — tuned for small networks
-      Dlo: 1,                        // minimum mesh size
-      Dhi: 4,                        // maximum mesh size
-      floodPublish: true,            // flood all peers, don't rely on mesh
-      heartbeatInterval: 700,        // faster mesh formation (ms)
-      emitSelf: false                // don't echo your own messages back
+      allowPublishToZeroPeers: true,
+      D: 2,
+      Dlo: 1,
+      Dhi: 4,
+      floodPublish: true,
+      heartbeatInterval: 700,
+      emitSelf: false
     }),
     dcutr: dcutr()
   },
@@ -140,8 +140,17 @@ DOM.subscribeButton().onclick = async () => {
 
     setStatus('relay', 'Setting up secure connection…')
 
-    // Wait for WebRTC address
+    // Wait for WebRTC/circuit address
     await waitForWebRTCAddress()
+
+    // ── FIX: Subscribe to gossipsub BEFORE dialing peers ──────────────────────
+    // GossipSub includes your current subscriptions in the HELLO handshake
+    // when a new connection is established. If you subscribe AFTER dialing,
+    // the other peer's gossipsub won't know you're subscribed during that
+    // handshake, so your subscription message might arrive too late and
+    // messages sent shortly after connecting will be missed.
+    libp2p.services.pubsub.subscribe(topic)
+    log(`Subscribed to channel "${topic}"`, 'info')
 
     // Register in peer registry
     const myAddrs = libp2p.getMultiaddrs().map(ma => ma.toString())
@@ -160,7 +169,11 @@ DOM.subscribeButton().onclick = async () => {
     if (peers.length === 0) {
       setStatus('waiting', 'Waiting for others to join…')
       log('You are the first one here. Share the topic name to invite others.', 'info')
+      DOM.messageInput().disabled = false
+      DOM.sendButton().disabled = false
     } else {
+      log(`Found ${peers.length} peer(s), connecting…`, 'info')
+
       for (const peer of peers) {
         const addrs = [
           ...peer.multiaddrs.filter(a => a.includes('/webrtc') || a.includes('/p2p-circuit')),
@@ -170,13 +183,18 @@ DOM.subscribeButton().onclick = async () => {
           try { await libp2p.dial(multiaddr(addr)); break } catch { /* silent */ }
         }
       }
+
       setStatus('connected', `Connected — topic: ${topic}`)
       log(`Connected to channel "${topic}" ✓`, 'success')
-    }
 
-    // Subscribe gossipsub
-    libp2p.services.pubsub.subscribe(topic)
-    log(`Joined channel "${topic}" — messages are end-to-end encrypted.`, 'success')
+      // ── FIX: Wait for gossipsub mesh to confirm the peer ──────────────────
+      // Even with floodPublish, gossipsub needs one heartbeat (~700ms) to
+      // confirm peers are subscribed. We wait up to 4s before enabling send.
+      await waitForGossipsubPeer(topic)
+
+      DOM.messageInput().disabled = false
+      DOM.sendButton().disabled = false
+    }
 
     // Load message history
     try {
@@ -191,18 +209,16 @@ DOM.subscribeButton().onclick = async () => {
       }
     } catch { /* history optional */ }
 
-    DOM.messageInput().disabled = false
-    DOM.sendButton().disabled = false
-
   } catch (err) {
     setStatus('error', 'Connection failed — try again')
-    log('Could not connect. Please try again.', 'error')
+    log(`Connection error: ${err.message}`, 'error')
     DOM.subscribeButton().disabled = false
     DOM.topicInput().disabled = false
+    currentTopic = null
   }
 }
 
-// Helper: wait for WebRTC/circuit address
+// ── Helper: wait for WebRTC/circuit address ────────────────────────────────────
 function waitForWebRTCAddress(timeout = 15000) {
   return new Promise((resolve) => {
     const check = () => {
@@ -215,6 +231,27 @@ function waitForWebRTCAddress(timeout = 15000) {
     libp2p.addEventListener('self:peer:update', check)
     check()
     setTimeout(() => { libp2p.removeEventListener('self:peer:update', check); resolve() }, timeout)
+  })
+}
+
+// ── Helper: wait for at least 1 peer in the gossipsub mesh ────────────────────
+// Polls every 300ms. Resolves when a subscriber appears or after 4s timeout.
+function waitForGossipsubPeer(topic, timeout = 4000) {
+  return new Promise((resolve) => {
+    const interval = setInterval(() => {
+      const subs = libp2p.services.pubsub.getSubscribers(topic)
+      if (subs.length > 0) {
+        clearInterval(interval)
+        clearTimeout(timer)
+        log(`Peer confirmed in mesh — ready to chat!`, 'success')
+        resolve()
+      }
+    }, 300)
+    const timer = setTimeout(() => {
+      clearInterval(interval)
+      log('Peer mesh not confirmed yet — messages may be delayed.', 'warn')
+      resolve()
+    }, timeout)
   })
 }
 
@@ -238,6 +275,12 @@ DOM.sendButton().onclick = async () => {
   const message = DOM.messageInput().value.trim()
   if (!topic || !message) return
 
+  // Warn if no peers are in the mesh yet
+  const subscribers = libp2p.services.pubsub.getSubscribers(topic)
+  if (subscribers.length === 0) {
+    log('No peers in mesh yet — message may not be delivered. Sending anyway…', 'warn')
+  }
+
   try {
     await libp2p.services.pubsub.publish(topic, fromString(message))
     log(`You: ${message}`, 'sent')
@@ -250,7 +293,7 @@ DOM.sendButton().onclick = async () => {
     }).catch(() => {})
 
   } catch (err) {
-    log('Message failed to send. Are you connected?', 'error')
+    log(`Send failed: ${err.message}`, 'error')
   }
 }
 
