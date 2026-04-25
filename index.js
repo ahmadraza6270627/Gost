@@ -69,7 +69,15 @@ const libp2p = await createLibp2p({
   connectionGater: { denyDialMultiaddr: () => false },
   services: {
     identify: identify(),
-    pubsub: gossipsub(),
+    pubsub: gossipsub({
+      allowPublishToZeroPeers: true, // send even if mesh isn't fully formed
+      D: 2,                          // mesh target — tuned for small networks
+      Dlo: 1,                        // minimum mesh size
+      Dhi: 4,                        // maximum mesh size
+      floodPublish: true,            // flood all peers, don't rely on mesh
+      heartbeatInterval: 700,        // faster mesh formation (ms)
+      emitSelf: false                // don't echo your own messages back
+    }),
     dcutr: dcutr()
   },
   connectionManager: { minConnections: 0 }
