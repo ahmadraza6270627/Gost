@@ -90,6 +90,24 @@ if (window.setPeerId) {
   DOM.peerId().textContent = libp2p.peerId.toString()
 }
 
+// ── Expose debug helpers to browser console ───────────────────────────────────
+// After clicking Connect, run window.debug() in DevTools to see full state
+window._libp2p = libp2p
+window.debug = () => {
+  const topic = currentTopic
+  console.group('P2P Debug Info')
+  console.log('Topic:', topic)
+  console.log('My Peer ID:', libp2p.peerId.toString())
+  console.log('Connected peers:', libp2p.getPeers().map(p => p.toString()))
+  console.log('My multiaddrs:', libp2p.getMultiaddrs().map(a => a.toString()))
+  if (topic) {
+    console.log('Pubsub subscribers:', libp2p.services.pubsub.getSubscribers(topic).map(p => p.toString()))
+  } else {
+    console.log('Pubsub subscribers: (no topic yet)')
+  }
+  console.groupEnd()
+}
+
 // ── Peer joined/left notifications ────────────────────────────────────────────
 libp2p.addEventListener('connection:open', () => {
   if (currentTopic) {
