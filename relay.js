@@ -11,9 +11,7 @@ import http from 'http'
 const RELAY_HOST = process.env.RELAY_HOST || '0.0.0.0'
 const RELAY_HTTP_PORT = process.env.PORT || 4001
 const RELAY_PUBLIC_HOST = process.env.RAILWAY_PUBLIC_DOMAIN || 'localhost'
-const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'https://gost-five.vercel.app'
 
-// libp2p uses a random port for WebSocket transport
 const server = await createLibp2p({
   addresses: {
     listen: [`/ip4/${RELAY_HOST}/tcp/0/ws`],
@@ -29,13 +27,17 @@ const server = await createLibp2p({
   connectionManager: { minConnections: 0 }
 })
 
+// ✅ FIX 1: Start the libp2p node before reading multiaddrs
+await server.start()
+
 const relayMultiaddrs = server.getMultiaddrs().map(ma => ma.toString())
 console.log('Relay listening on:', relayMultiaddrs)
 
 const topicPeers = {}
 
 const httpServer = http.createServer((req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', CLIENT_ORIGIN)
+  // ✅ FIX 2: Allow all origins for now (lock down after testing)
+  res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 
