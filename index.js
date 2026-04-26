@@ -20,44 +20,36 @@ if (!sessionStorage.getItem('authToken')) {
 const RELAY_API    = import.meta.env.VITE_RELAY_URL || 'http://localhost:4001'
 const MESSAGES_API = import.meta.env.VITE_API_URL   || 'http://localhost:5000'
 
-// ── DOM helpers ────────────────────────────────────────────────────────────────
-const DOM = {
-  peerId:          () => document.getElementById('peer-id'),
-  topicInput:      () => document.getElementById('topic-input'),
-  subscribeButton: () => document.getElementById('subscribe-button'),
-  endButton:       () => document.getElementById('end-button'),
-  messageInput:    () => document.getElementById('message-input'),
-  sendButton:      () => document.getElementById('send-button'),
-  output:          () => document.getElementById('output'),
-  statusDot:       () => document.getElementById('status-dot'),
-  statusText:      () => document.getElementById('status-text'),
-  topicPeerList:   () => document.getElementById('topic-peers'),
-  currentTopic:    () => document.getElementById('current-topic'),
+// ── DOM ───────────────────────────────────────────────────────────────────────
+const $topic     = () => document.getElementById('topic-input')
+const $subscribe = () => document.getElementById('subscribe-button')
+const $endBtn    = () => document.getElementById('end-button')
+const $msgInput  = () => document.getElementById('message-input')
+const $sendBtn   = () => document.getElementById('send-button')
+const $output    = () => document.getElementById('output')
+const $statusDot = () => document.getElementById('status-dot')
+const $statusTxt = () => document.getElementById('status-text')
+const $peerList  = () => document.getElementById('topic-peers')
+const $curTopic  = () => document.getElementById('current-topic')
+const $peerId    = () => document.getElementById('peer-id')
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function log(text, type = 'info') {
+  if (window.addLog) { window.addLog(text, type); return }
+  const line = document.createElement('div')
+  line.className = `log-line log-${type}`
+  line.textContent = `${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} › ${text}`
+  $output().appendChild(line)
+  $output().scrollTop = $output().scrollHeight
 }
 
-// ── Log helper ─────────────────────────────────────────────────────────────────
-const log = (line, type = 'info') => {
-  if (window.addLog) {
-    window.addLog(line, type)
-  } else {
-    const el = document.createElement('div')
-    el.className = `log-line log-${type}`
-    el.textContent = `${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} › ${line}`
-    DOM.output().appendChild(el)
-    DOM.output().scrollTop = DOM.output().scrollHeight
-  }
+function setStatus(state, text) {
+  if (window.setStatus) { window.setStatus(text, state); return }
+  $statusDot().className = `s-dot dot-${state}`
+  $statusTxt().textContent = text
 }
 
-const setStatus = (state, text) => {
-  if (window.setStatus) {
-    window.setStatus(text, state)
-  } else {
-    DOM.statusDot().className = `s-dot dot-${state}`
-    DOM.statusText().textContent = text
-  }
-}
-
-// ── libp2p node ────────────────────────────────────────────────────────────────
+// ── libp2p ────────────────────────────────────────────────────────────────────
 const libp2p = await createLibp2p({
   addresses: { listen: ['/webrtc'] },
   transports: [
@@ -80,68 +72,24 @@ const libp2p = await createLibp2p({
 })
 
 // Set peer ID
-if (window.setPeerId) {
-  window.setPeerId(libp2p.peerId.toString())
-} else {
-  DOM.peerId().textContent = libp2p.peerId.toString()
-}
+const myPeerId = libp2p.peerId.toString()
+if (window.setPeerId) window.setPeerId(myPeerId)
+else if ($peerId()) $peerId().textContent = myPeerId
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let currentTopic     = null
 let peerPollInterval = null
 let meshPollInterval = null
+let msgCount         = 0
 
-// ── Connection events ─────────────────────────────────────────────────────────
-libp2p.addEventListener('connection:open', (evt) => {
-  console.log('[connection:open]', evt.detail?.remotePeer?.toString())
-  if (currentTopic) updateConnectionStatus()
-})
-
-libp2p.addEventListener('connection:close', (evt) => {
-  console.log('[connection:close]', evt.detail?.remotePeer?.toString())
-  if (currentTopic) updateConnectionStatus()
-})
-
-function updateConnectionStatus() {
-  const peers = libp2p.getPeers().length
-  const meshPeers = currentTopic ? libp2p.services.pubsub.getSubscribers(currentTopic).length : 0
-  if (meshPeers > 0) {
-    setStatus('connected', `Connected — topic: ${currentTopic} (${meshPeers} peer${meshPeers > 1 ? 's' : ''} in mesh)`)
-  } else if (peers > 0) {
-    setStatus('relay', `Relay connected — waiting for mesh (${peers} peer${peers > 1 ? 's' : ''})`)
-  } else {
-    setStatus('waiting', 'Waiting for peers…')
-  }
-}
-
-// ── Reset UI ──────────────────────────────────────────────────────────────────
-function resetUI() {
-  stopPeerPoll()
-  stopMeshPoll()
-  DOM.subscribeButton().disabled = false
-  DOM.topicInput().disabled = false
-  DOM.topicInput().value = ''
-  DOM.messageInput().disabled = true
-  DOM.messageInput().value = ''
-  DOM.sendButton().disabled = true
-  const endBtn = DOM.endButton()
-  if (endBtn) endBtn.style.display = 'none'
-  DOM.currentTopic().textContent = '—'
-  setStatus('idle', 'Idle — enter a topic to connect')
-  currentTopic = null
-}
-
-// ── Peer poll — keeps trying to connect to registry peers ─────────────────────
+// ── Polls ─────────────────────────────────────────────────────────────────────
 function startPeerPoll(topic) {
   peerPollInterval = setInterval(async () => {
     if (!currentTopic) return
     try {
-      const res = await fetch(
-        `${RELAY_API}/peers?topic=${encodeURIComponent(topic)}&exclude=${libp2p.peerId.toString()}`
-      )
+      const res = await fetch(`${RELAY_API}/peers?topic=${encodeURIComponent(topic)}&exclude=${myPeerId}`)
       const { peers } = await res.json()
       const connectedIds = libp2p.getPeers().map(p => p.toString())
-
       for (const peer of peers) {
         if (connectedIds.includes(peer.peerId)) continue
         const addrs = [
@@ -156,30 +104,43 @@ function startPeerPoll(topic) {
   }, 4000)
 }
 
-function stopPeerPoll() {
-  if (peerPollInterval) { clearInterval(peerPollInterval); peerPollInterval = null }
-}
-
-// ── Mesh poll — waits for gossipsub mesh to form ──────────────────────────────
 function startMeshPoll(topic) {
   meshPollInterval = setInterval(() => {
     if (!currentTopic) return
-    const meshPeers = libp2p.services.pubsub.getSubscribers(topic).length
-    if (meshPeers > 0) {
-      setStatus('connected', `Connected — topic: ${topic} (${meshPeers} peer${meshPeers > 1 ? 's' : ''} in mesh)`)
-      log(`Peer mesh confirmed — ${meshPeers} peer(s) ready. You can send messages!`, 'success')
+    const n = libp2p.services.pubsub.getSubscribers(topic).length
+    if (n > 0) {
+      setStatus('connected', `Connected — topic: ${topic} (${n} peer${n > 1 ? 's' : ''} in mesh)`)
+      log(`Peer mesh ready — ${n} peer(s) connected. Messages will be delivered!`, 'success')
       stopMeshPoll()
     }
   }, 1000)
 }
 
-function stopMeshPoll() {
-  if (meshPollInterval) { clearInterval(meshPollInterval); meshPollInterval = null }
+function stopPeerPoll() { if (peerPollInterval) { clearInterval(peerPollInterval); peerPollInterval = null } }
+function stopMeshPoll() { if (meshPollInterval) { clearInterval(meshPollInterval); meshPollInterval = null } }
+
+// ── Reset ─────────────────────────────────────────────────────────────────────
+function resetUI() {
+  stopPeerPoll()
+  stopMeshPoll()
+  currentTopic = null
+  msgCount = 0
+
+  $subscribe().disabled = false
+  $subscribe().textContent = 'Connect'
+  $topic().disabled = false
+  $topic().value = ''
+  $msgInput().disabled = true
+  $msgInput().value = ''
+  $sendBtn().disabled = true
+  if ($endBtn()) $endBtn().style.display = 'none'
+  if ($curTopic()) $curTopic().textContent = '—'
+  setStatus('idle', 'Idle — enter a topic to connect')
 }
 
-// ── Helper: wait for relay/circuit address ────────────────────────────────────
-function waitForWebRTCAddress(timeout = 15000) {
-  return new Promise((resolve) => {
+// ── Wait for circuit address ───────────────────────────────────────────────────
+function waitForCircuitAddress(timeout = 15000) {
+  return new Promise(resolve => {
     const check = () => {
       const addrs = libp2p.getMultiaddrs().map(ma => ma.toString())
       if (addrs.some(a => a.includes('/webrtc') || a.includes('/p2p-circuit'))) {
@@ -193,75 +154,64 @@ function waitForWebRTCAddress(timeout = 15000) {
   })
 }
 
-// ── Re-register on address change ─────────────────────────────────────────────
+// ── Re-register on address update ─────────────────────────────────────────────
 libp2p.addEventListener('self:peer:update', async () => {
   if (!currentTopic) return
   const myAddrs = libp2p.getMultiaddrs().map(ma => ma.toString())
-  if (myAddrs.length === 0) return
+  if (!myAddrs.length) return
   try {
     await fetch(`${RELAY_API}/peers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic: currentTopic, peerId: libp2p.peerId.toString(), multiaddrs: myAddrs })
+      body: JSON.stringify({ topic: currentTopic, peerId: myPeerId, multiaddrs: myAddrs })
     })
   } catch { /* silent */ }
 })
 
 // ── Connect ───────────────────────────────────────────────────────────────────
-DOM.subscribeButton().onclick = async () => {
-  const topic = DOM.topicInput().value.trim()
+$subscribe().addEventListener('click', async () => {
+  const topic = $topic().value.trim()
   if (!topic) return
 
-  DOM.subscribeButton().disabled = true
-  DOM.topicInput().disabled = true
+  $subscribe().disabled = true
+  $topic().disabled = true
   currentTopic = topic
-  DOM.currentTopic().textContent = topic
-  const endBtn = DOM.endButton()
-  if (endBtn) endBtn.style.display = 'inline-flex'
+  if ($curTopic()) $curTopic().textContent = topic
+  if ($endBtn()) $endBtn().style.display = 'inline-flex'
 
   setStatus('connecting', 'Connecting to relay…')
 
   try {
-    // 1. Fetch relay addresses
+    // 1. Fetch relay
     const relayRes = await fetch(`${RELAY_API}/relay`)
     const { multiaddrs: relayAddrs } = await relayRes.json()
-    if (!relayAddrs || relayAddrs.length === 0) throw new Error('Relay unavailable')
+    if (!relayAddrs?.length) throw new Error('Relay unavailable')
 
     // 2. Dial relay
-    let connected = false
+    let relayConnected = false
     for (const addr of relayAddrs) {
-      try {
-        await libp2p.dial(multiaddr(addr))
-        connected = true
-        log(`Relay connected ✓`, 'success')
-        break
-      } catch (e) {
-        console.warn('[relay dial fail]', addr, e.message)
-      }
+      try { await libp2p.dial(multiaddr(addr)); relayConnected = true; break }
+      catch (e) { console.warn('[relay dial]', e.message) }
     }
-    if (!connected) throw new Error('Could not connect to relay')
+    if (!relayConnected) throw new Error('Could not connect to relay')
 
     setStatus('relay', 'Waiting for circuit address…')
+    await waitForCircuitAddress()
 
-    // 3. Wait for circuit relay address
-    await waitForWebRTCAddress()
-
-    // 4. Subscribe gossipsub FIRST before registering
+    // 3. Subscribe FIRST
     libp2p.services.pubsub.subscribe(topic)
     log(`Subscribed to channel "${topic}"`, 'info')
 
-    // 5. Register self in peer registry
+    // 4. Register self
     const myAddrs = libp2p.getMultiaddrs().map(ma => ma.toString())
     await fetch(`${RELAY_API}/peers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, peerId: libp2p.peerId.toString(), multiaddrs: myAddrs })
+      body: JSON.stringify({ topic, peerId: myPeerId, multiaddrs: myAddrs })
     })
 
-    // 6. Find and connect to existing peers
-    const peersRes = await fetch(
-      `${RELAY_API}/peers?topic=${encodeURIComponent(topic)}&exclude=${libp2p.peerId.toString()}`
-    )
+    // 5. Find and dial existing peers
+    const peersRes = await fetch(`${RELAY_API}/peers?topic=${encodeURIComponent(topic)}&exclude=${myPeerId}`)
     const { peers } = await peersRes.json()
 
     if (peers.length === 0) {
@@ -278,30 +228,35 @@ DOM.subscribeButton().onclick = async () => {
           try { await libp2p.dial(multiaddr(addr)); break } catch { /* silent */ }
         }
       }
-      setStatus('relay', 'Peers found — waiting for gossipsub mesh…')
       log(`Connected to channel "${topic}" ✓`, 'success')
       log('Peer mesh not confirmed yet — messages may be delayed.', 'warn')
+      setStatus('relay', 'Building gossipsub mesh…')
     }
 
-    // 7. Load message history
+    // 6. Load history
     try {
-      const historyRes = await fetch(`${MESSAGES_API}/messages/${encodeURIComponent(topic)}`)
-      const history = await historyRes.json()
+      const histRes = await fetch(`${MESSAGES_API}/messages/${encodeURIComponent(topic)}`)
+      const history = await histRes.json()
       if (history.length > 0) {
         log(`── ${history.length} previous message(s) ──`, 'info')
-        for (const m of history) {
-          const sender = m.peerId === libp2p.peerId.toString() ? 'You' : 'Peer'
-          log(`${sender}: ${m.message}`, m.peerId === libp2p.peerId.toString() ? 'sent' : 'received')
-        }
+        history.forEach(m => {
+          const isMe = m.peerId === myPeerId
+          log(`${isMe ? 'You' : 'Peer'}: ${m.message}`, isMe ? 'sent' : 'received')
+          msgCount++
+        })
       }
     } catch { /* history optional */ }
 
-    // 8. Enable input
-    DOM.messageInput().disabled = false
-    DOM.sendButton().disabled = false
-    DOM.messageInput().focus()
+    // 7. Enable input — CRITICAL: remove disabled attribute completely
+    $msgInput().removeAttribute('disabled')
+    $msgInput().disabled = false
+    $sendBtn().removeAttribute('disabled')
+    $sendBtn().disabled = false
+    $msgInput().focus()
 
-    // 9. Start polls
+    log('Channel joined — messages are end-to-end encrypted.', 'success')
+
+    // 8. Start polls
     startPeerPoll(topic)
     startMeshPoll(topic)
 
@@ -311,47 +266,48 @@ DOM.subscribeButton().onclick = async () => {
     log(`Connection failed: ${err.message}`, 'error')
     resetUI()
   }
-}
+})
 
-// ── End / Disconnect ──────────────────────────────────────────────────────────
-const endBtn = DOM.endButton()
-if (endBtn) {
-  endBtn.style.display = 'none'
-  endBtn.onclick = async () => {
+// ── End button ────────────────────────────────────────────────────────────────
+if ($endBtn()) {
+  $endBtn().style.display = 'none'
+  $endBtn().addEventListener('click', async () => {
     try {
       if (currentTopic) libp2p.services.pubsub.unsubscribe(currentTopic)
       for (const peer of libp2p.getPeers()) {
         try { await libp2p.hangUp(peer) } catch { /* silent */ }
       }
-    } catch (err) {
-      console.error('[disconnect error]', err)
-    }
+    } catch (err) { console.error('[disconnect]', err) }
     log('Disconnected from channel.', 'info')
     resetUI()
-  }
+  })
 }
 
-// ── Send message ───────────────────────────────────────────────────────────────
+// ── Send ──────────────────────────────────────────────────────────────────────
 async function sendMessage() {
   const topic   = currentTopic
-  const message = DOM.messageInput().value.trim()
+  const message = $msgInput().value.trim()
   if (!topic || !message) return
 
   const meshPeers = libp2p.services.pubsub.getSubscribers(topic).length
   if (meshPeers === 0) {
-    log('No peers in mesh yet — message may not be delivered. Sending anyway…', 'warn')
+    log('No peers in mesh yet — sending anyway (may not be delivered)…', 'warn')
   }
 
   try {
     await libp2p.services.pubsub.publish(topic, fromString(message))
     log(`You: ${message}`, 'sent')
-    DOM.messageInput().value = ''
+    $msgInput().value = ''
+    // Reset char counter
+    const cc = document.getElementById('char-count')
+    if (cc) cc.textContent = '0 / 500'
+    msgCount++
 
     // Save to backend
     fetch(`${MESSAGES_API}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, peerId: libp2p.peerId.toString(), message })
+      body: JSON.stringify({ topic, peerId: myPeerId, message })
     }).catch(() => {})
 
   } catch (err) {
@@ -360,35 +316,29 @@ async function sendMessage() {
   }
 }
 
-DOM.sendButton().onclick = sendMessage
-
-DOM.messageInput().addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    sendMessage()
-  }
-})
+// Wire up send button with addEventListener (more reliable than onclick)
+$sendBtn().addEventListener('click', sendMessage)
 
 // ── Incoming messages ──────────────────────────────────────────────────────────
 libp2p.services.pubsub.addEventListener('message', event => {
   if (event.detail.topic !== currentTopic) return
   const message = toString(event.detail.data)
   log(`Peer: ${message}`, 'received')
+  msgCount++
 })
 
-// ── Topic peer list UI poll ────────────────────────────────────────────────────
+// ── Peer list UI ──────────────────────────────────────────────────────────────
 setInterval(() => {
   if (!currentTopic) return
-  const peers = libp2p.services.pubsub.getSubscribers(currentTopic)
-  const list = DOM.topicPeerList()
+  const list = $peerList()
   if (!list) return
+  const peers = libp2p.services.pubsub.getSubscribers(currentTopic)
   if (peers.length > 0) {
-    const items = peers.map(peerId => {
+    list.replaceChildren(...peers.map(pid => {
       const li = document.createElement('li')
-      li.innerHTML = `<span class="peer-dot"></span>${peerId.toString().slice(0, 20)}…`
+      li.innerHTML = `<span class="peer-dot"></span>${pid.toString().slice(0, 20)}…`
       return li
-    })
-    list.replaceChildren(...items)
+    }))
   } else {
     list.innerHTML = '<li class="empty">No peers in mesh yet</li>'
   }
