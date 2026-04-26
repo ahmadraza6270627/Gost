@@ -27,8 +27,6 @@ const $endBtn    = () => document.getElementById('end-button')
 const $msgInput  = () => document.getElementById('message-input')
 const $sendBtn   = () => document.getElementById('send-button')
 const $output    = () => document.getElementById('output')
-const $statusDot = () => document.getElementById('status-dot')
-const $statusTxt = () => document.getElementById('status-text')
 const $peerList  = () => document.getElementById('topic-peers')
 const $curTopic  = () => document.getElementById('current-topic')
 const $peerId    = () => document.getElementById('peer-id')
@@ -44,10 +42,12 @@ function log(text, type = 'info') {
 }
 
 function setStatus(state, text) {
-  if (window.setStatus) { window.setStatus(text, state); return }
-  $statusDot().className = `s-dot dot-${state}`
-  $statusTxt().textContent = text
+  if (window.setStatus) { window.setStatus(state, text); return }
+  document.getElementById('status-dot').className = `s-dot dot-${state}`
+  document.getElementById('status-text').textContent = text
 }
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
 // ── libp2p ────────────────────────────────────────────────────────────────────
 const libp2p = await createLibp2p({
@@ -65,6 +65,15 @@ const libp2p = await createLibp2p({
     pubsub: gossipsub({
       allowPublishToZeroTopicPeers: true,
       floodPublish: true,
+      canRelayMessage: true,
+      emitSelf: false,
+      scoreThresholds: {
+        gossipThreshold:              -Infinity,
+        publishThreshold:             -Infinity,
+        graylistThreshold:            -Infinity,
+        acceptPXThreshold:            -Infinity,
+        opportunisticGraftThreshold:  -Infinity,
+      },
     }),
     dcutr: dcutr()
   },
@@ -80,7 +89,35 @@ else if ($peerId()) $peerId().textContent = myPeerId
 let currentTopic     = null
 let peerPollInterval = null
 let meshPollInterval = null
-let msgCount         = 0
+let meshConfirmed    = false
+
+// ── When a new peer connects — resubscribe to refresh gossipsub mesh ──────────
+libp2p.addEventListener('connection:open', async (evt) => {
+  const remotePeer = evt.detail?.remotePeer?.toString()
+  console.log('[connection:open]', remotePeer)
+  if (!currentTopic) return
+
+  // Wait briefly then resubscribe to force gossipsub mesh refresh
+  await sleep(500)
+  try {
+    libp2p.services.pubsub.unsubscribe(currentTopic)
+    await sleep(200)
+    libp2p.services.pubsub.subscribe(currentTopic)
+    console.log('[gossipsub] resubscribed after peer connect')
+  } catch (e) {
+    console.warn('[gossipsub resubscribe]', e.message)
+  }
+})
+
+libp2p.addEventListener('connection:close', (evt) => {
+  console.log('[connection:close]', evt.detail?.remotePeer?.toString())
+  if (!currentTopic) return
+  const n = libp2p.services.pubsub.getSubscribers(currentTopic).length
+  if (n === 0) {
+    meshConfirmed = false
+    setStatus('waiting', 'Peer disconnected — waiting for others…')
+  }
+})
 
 // ── Polls ─────────────────────────────────────────────────────────────────────
 function startPeerPoll(topic) {
@@ -108,10 +145,15 @@ function startMeshPoll(topic) {
   meshPollInterval = setInterval(() => {
     if (!currentTopic) return
     const n = libp2p.services.pubsub.getSubscribers(topic).length
-    if (n > 0) {
+    if (n > 0 && !meshConfirmed) {
+      meshConfirmed = true
       setStatus('connected', `Connected — topic: ${topic} (${n} peer${n > 1 ? 's' : ''} in mesh)`)
       log(`Peer mesh ready — ${n} peer(s) connected. Messages will be delivered!`, 'success')
-      stopMeshPoll()
+    } else if (n === 0 && meshConfirmed) {
+      meshConfirmed = false
+      setStatus('waiting', 'Mesh lost — waiting for peers to reconnect…')
+    } else if (n > 0 && meshConfirmed) {
+      setStatus('connected', `Connected — topic: ${topic} (${n} peer${n > 1 ? 's' : ''} in mesh)`)
     }
   }, 1000)
 }
@@ -123,8 +165,8 @@ function stopMeshPoll() { if (meshPollInterval) { clearInterval(meshPollInterval
 function resetUI() {
   stopPeerPoll()
   stopMeshPoll()
-  currentTopic = null
-  msgCount = 0
+  currentTopic  = null
+  meshConfirmed = false
 
   $subscribe().disabled = false
   $subscribe().textContent = 'Connect'
@@ -176,6 +218,7 @@ $subscribe().addEventListener('click', async () => {
   $subscribe().disabled = true
   $topic().disabled = true
   currentTopic = topic
+  meshConfirmed = false
   if ($curTopic()) $curTopic().textContent = topic
   if ($endBtn()) $endBtn().style.display = 'inline-flex'
 
@@ -198,11 +241,14 @@ $subscribe().addEventListener('click', async () => {
     setStatus('relay', 'Waiting for circuit address…')
     await waitForCircuitAddress()
 
-    // 3. Subscribe FIRST
+    // 3. Subscribe FIRST before announcing
     libp2p.services.pubsub.subscribe(topic)
     log(`Subscribed to channel "${topic}"`, 'info')
 
-    // 4. Register self
+    // 4. Wait briefly for gossipsub to initialize
+    await sleep(500)
+
+    // 5. Register self
     const myAddrs = libp2p.getMultiaddrs().map(ma => ma.toString())
     await fetch(`${RELAY_API}/peers`, {
       method: 'POST',
@@ -210,7 +256,7 @@ $subscribe().addEventListener('click', async () => {
       body: JSON.stringify({ topic, peerId: myPeerId, multiaddrs: myAddrs })
     })
 
-    // 5. Find and dial existing peers
+    // 6. Find and dial existing peers
     const peersRes = await fetch(`${RELAY_API}/peers?topic=${encodeURIComponent(topic)}&exclude=${myPeerId}`)
     const { peers } = await peersRes.json()
 
@@ -228,12 +274,19 @@ $subscribe().addEventListener('click', async () => {
           try { await libp2p.dial(multiaddr(addr)); break } catch { /* silent */ }
         }
       }
+
+      // 7. Wait for connections then resubscribe to refresh gossipsub mesh
+      await sleep(1000)
+      libp2p.services.pubsub.unsubscribe(topic)
+      await sleep(300)
+      libp2p.services.pubsub.subscribe(topic)
+      console.log('[gossipsub] resubscribed after initial peer dial')
+
       log(`Connected to channel "${topic}" ✓`, 'success')
-      log('Peer mesh not confirmed yet — messages may be delayed.', 'warn')
       setStatus('relay', 'Building gossipsub mesh…')
     }
 
-    // 6. Load history
+    // 8. Load history
     try {
       const histRes = await fetch(`${MESSAGES_API}/messages/${encodeURIComponent(topic)}`)
       const history = await histRes.json()
@@ -242,21 +295,20 @@ $subscribe().addEventListener('click', async () => {
         history.forEach(m => {
           const isMe = m.peerId === myPeerId
           log(`${isMe ? 'You' : 'Peer'}: ${m.message}`, isMe ? 'sent' : 'received')
-          msgCount++
         })
       }
     } catch { /* history optional */ }
 
-    // 7. Enable input — CRITICAL: remove disabled attribute completely
+    log('Channel joined — messages are end-to-end encrypted.', 'success')
+
+    // 9. Enable input
     $msgInput().removeAttribute('disabled')
     $msgInput().disabled = false
     $sendBtn().removeAttribute('disabled')
     $sendBtn().disabled = false
     $msgInput().focus()
 
-    log('Channel joined — messages are end-to-end encrypted.', 'success')
-
-    // 8. Start polls
+    // 10. Start polls
     startPeerPoll(topic)
     startMeshPoll(topic)
 
@@ -298,10 +350,8 @@ async function sendMessage() {
     await libp2p.services.pubsub.publish(topic, fromString(message))
     log(`You: ${message}`, 'sent')
     $msgInput().value = ''
-    // Reset char counter
     const cc = document.getElementById('char-count')
     if (cc) cc.textContent = '0 / 500'
-    msgCount++
 
     // Save to backend
     fetch(`${MESSAGES_API}/messages`, {
@@ -316,7 +366,6 @@ async function sendMessage() {
   }
 }
 
-// Wire up send button with addEventListener (more reliable than onclick)
 $sendBtn().addEventListener('click', sendMessage)
 
 // ── Incoming messages ──────────────────────────────────────────────────────────
@@ -324,7 +373,6 @@ libp2p.services.pubsub.addEventListener('message', event => {
   if (event.detail.topic !== currentTopic) return
   const message = toString(event.detail.data)
   log(`Peer: ${message}`, 'received')
-  msgCount++
 })
 
 // ── Peer list UI ──────────────────────────────────────────────────────────────
