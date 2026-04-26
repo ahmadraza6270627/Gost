@@ -25,6 +25,7 @@ const DOM = {
   peerId:          () => document.getElementById('peer-id'),
   topicInput:      () => document.getElementById('topic-input'),
   subscribeButton: () => document.getElementById('subscribe-button'),
+  endButton:       () => document.getElementById('end-button'),
   messageInput:    () => document.getElementById('message-input'),
   sendButton:      () => document.getElementById('send-button'),
   output:          () => document.getElementById('output'),
@@ -34,7 +35,7 @@ const DOM = {
   currentTopic:    () => document.getElementById('current-topic'),
 }
 
-// ── Clean log ─────────────────────────────────────────────────────────────────
+// ── Log helper ─────────────────────────────────────────────────────────────────
 const log = (line, type = 'info') => {
   if (window.addLog) {
     window.addLog(line, type)
@@ -70,129 +71,79 @@ const libp2p = await createLibp2p({
   services: {
     identify: identify(),
     pubsub: gossipsub({
-      allowPublishToZeroPeers: true,
-      D: 2,
-      Dlo: 1,
-      Dhi: 4,
+      allowPublishToZeroTopicPeers: true,
       floodPublish: true,
-      heartbeatInterval: 700,
-      emitSelf: false
     }),
     dcutr: dcutr()
   },
   connectionManager: { minConnections: 0 }
 })
 
-// Set peer ID in header chip
+// Set peer ID
 if (window.setPeerId) {
   window.setPeerId(libp2p.peerId.toString())
 } else {
   DOM.peerId().textContent = libp2p.peerId.toString()
 }
 
-// ── Expose debug helpers to browser console ───────────────────────────────────
-// After clicking Connect, run window.debug() in DevTools to see full state
-window._libp2p = libp2p
-window.debug = () => {
-  const topic = currentTopic
-  console.group('P2P Debug Info')
-  console.log('Topic:', topic)
-  console.log('My Peer ID:', libp2p.peerId.toString())
-  console.log('Connected peers:', libp2p.getPeers().map(p => p.toString()))
-  console.log('My multiaddrs:', libp2p.getMultiaddrs().map(a => a.toString()))
-  if (topic) {
-    console.log('Pubsub subscribers:', libp2p.services.pubsub.getSubscribers(topic).map(p => p.toString()))
+// ── State ─────────────────────────────────────────────────────────────────────
+let currentTopic     = null
+let peerPollInterval = null
+let meshPollInterval = null
+
+// ── Connection events ─────────────────────────────────────────────────────────
+libp2p.addEventListener('connection:open', (evt) => {
+  console.log('[connection:open]', evt.detail?.remotePeer?.toString())
+  if (currentTopic) updateConnectionStatus()
+})
+
+libp2p.addEventListener('connection:close', (evt) => {
+  console.log('[connection:close]', evt.detail?.remotePeer?.toString())
+  if (currentTopic) updateConnectionStatus()
+})
+
+function updateConnectionStatus() {
+  const peers = libp2p.getPeers().length
+  const meshPeers = currentTopic ? libp2p.services.pubsub.getSubscribers(currentTopic).length : 0
+  if (meshPeers > 0) {
+    setStatus('connected', `Connected — topic: ${currentTopic} (${meshPeers} peer${meshPeers > 1 ? 's' : ''} in mesh)`)
+  } else if (peers > 0) {
+    setStatus('relay', `Relay connected — waiting for mesh (${peers} peer${peers > 1 ? 's' : ''})`)
   } else {
-    console.log('Pubsub subscribers: (no topic yet)')
+    setStatus('waiting', 'Waiting for peers…')
   }
-  console.groupEnd()
 }
 
-// ── Peer joined/left notifications ────────────────────────────────────────────
-libp2p.addEventListener('connection:open', () => {
-  if (currentTopic) {
-    setStatus('connected', `Connected — topic: ${currentTopic}`)
-  }
-})
+// ── Reset UI ──────────────────────────────────────────────────────────────────
+function resetUI() {
+  stopPeerPoll()
+  stopMeshPoll()
+  DOM.subscribeButton().disabled = false
+  DOM.topicInput().disabled = false
+  DOM.topicInput().value = ''
+  DOM.messageInput().disabled = true
+  DOM.messageInput().value = ''
+  DOM.sendButton().disabled = true
+  const endBtn = DOM.endButton()
+  if (endBtn) endBtn.style.display = 'none'
+  DOM.currentTopic().textContent = '—'
+  setStatus('idle', 'Idle — enter a topic to connect')
+  currentTopic = null
+}
 
-libp2p.addEventListener('connection:close', () => {
-  if (currentTopic) {
-    const count = libp2p.getPeers().length
-    if (count === 0) {
-      setStatus('waiting', 'Waiting for peers…')
-      log('A peer disconnected. Waiting for others…', 'info')
-    }
-  }
-})
-
-// ── Subscribe flow ─────────────────────────────────────────────────────────────
-let currentTopic = null
-
-DOM.subscribeButton().onclick = async () => {
-  const topic = DOM.topicInput().value.trim()
-  if (!topic) return
-
-  DOM.subscribeButton().disabled = true
-  DOM.topicInput().disabled = true
-  currentTopic = topic
-  DOM.currentTopic().textContent = topic
-
-  setStatus('connecting', 'Connecting…')
-
-  try {
-    // Fetch relay addresses
-    const relayRes = await fetch(`${RELAY_API}/relay`)
-    const { multiaddrs: relayAddrs } = await relayRes.json()
-    if (!relayAddrs || relayAddrs.length === 0) throw new Error('Relay unavailable')
-
-    // Try all relay addresses until one works
-    let connected = false
-    for (const addr of relayAddrs) {
-      try {
-        await libp2p.dial(multiaddr(addr))
-        connected = true
-        break
-      } catch { /* try next */ }
-    }
-    if (!connected) throw new Error('Could not connect to relay')
-
-    setStatus('relay', 'Setting up secure connection…')
-
-    // Wait for WebRTC/circuit address
-    await waitForWebRTCAddress()
-
-    // ── FIX: Subscribe to gossipsub BEFORE dialing peers ──────────────────────
-    // GossipSub includes your current subscriptions in the HELLO handshake
-    // when a new connection is established. If you subscribe AFTER dialing,
-    // the other peer's gossipsub won't know you're subscribed during that
-    // handshake, so your subscription message might arrive too late and
-    // messages sent shortly after connecting will be missed.
-    libp2p.services.pubsub.subscribe(topic)
-    log(`Subscribed to channel "${topic}"`, 'info')
-
-    // Register in peer registry
-    const myAddrs = libp2p.getMultiaddrs().map(ma => ma.toString())
-    await fetch(`${RELAY_API}/peers`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, peerId: libp2p.peerId.toString(), multiaddrs: myAddrs })
-    })
-
-    // Find and connect to existing peers
-    const peersRes = await fetch(
-      `${RELAY_API}/peers?topic=${encodeURIComponent(topic)}&exclude=${libp2p.peerId.toString()}`
-    )
-    const { peers } = await peersRes.json()
-
-    if (peers.length === 0) {
-      setStatus('waiting', 'Waiting for others to join…')
-      log('You are the first one here. Share the topic name to invite others.', 'info')
-      DOM.messageInput().disabled = false
-      DOM.sendButton().disabled = false
-    } else {
-      log(`Found ${peers.length} peer(s), connecting…`, 'info')
+// ── Peer poll — keeps trying to connect to registry peers ─────────────────────
+function startPeerPoll(topic) {
+  peerPollInterval = setInterval(async () => {
+    if (!currentTopic) return
+    try {
+      const res = await fetch(
+        `${RELAY_API}/peers?topic=${encodeURIComponent(topic)}&exclude=${libp2p.peerId.toString()}`
+      )
+      const { peers } = await res.json()
+      const connectedIds = libp2p.getPeers().map(p => p.toString())
 
       for (const peer of peers) {
+        if (connectedIds.includes(peer.peerId)) continue
         const addrs = [
           ...peer.multiaddrs.filter(a => a.includes('/webrtc') || a.includes('/p2p-circuit')),
           ...peer.multiaddrs.filter(a => !a.includes('/webrtc') && !a.includes('/p2p-circuit'))
@@ -201,42 +152,32 @@ DOM.subscribeButton().onclick = async () => {
           try { await libp2p.dial(multiaddr(addr)); break } catch { /* silent */ }
         }
       }
-
-      setStatus('connected', `Connected — topic: ${topic}`)
-      log(`Connected to channel "${topic}" ✓`, 'success')
-
-      // ── FIX: Wait for gossipsub mesh to confirm the peer ──────────────────
-      // Even with floodPublish, gossipsub needs one heartbeat (~700ms) to
-      // confirm peers are subscribed. We wait up to 4s before enabling send.
-      await waitForGossipsubPeer(topic)
-
-      DOM.messageInput().disabled = false
-      DOM.sendButton().disabled = false
-    }
-
-    // Load message history
-    try {
-      const historyRes = await fetch(`${MESSAGES_API}/messages/${encodeURIComponent(topic)}`)
-      const history = await historyRes.json()
-      if (history.length > 0) {
-        log(`── ${history.length} previous message(s) ──`, 'info')
-        for (const m of history) {
-          const sender = m.peerId === libp2p.peerId.toString() ? 'You' : 'Peer'
-          log(`${sender}: ${m.message}`, m.peerId === libp2p.peerId.toString() ? 'sent' : 'received')
-        }
-      }
-    } catch { /* history optional */ }
-
-  } catch (err) {
-    setStatus('error', 'Connection failed — try again')
-    log(`Connection error: ${err.message}`, 'error')
-    DOM.subscribeButton().disabled = false
-    DOM.topicInput().disabled = false
-    currentTopic = null
-  }
+    } catch { /* silent */ }
+  }, 4000)
 }
 
-// ── Helper: wait for WebRTC/circuit address ────────────────────────────────────
+function stopPeerPoll() {
+  if (peerPollInterval) { clearInterval(peerPollInterval); peerPollInterval = null }
+}
+
+// ── Mesh poll — waits for gossipsub mesh to form ──────────────────────────────
+function startMeshPoll(topic) {
+  meshPollInterval = setInterval(() => {
+    if (!currentTopic) return
+    const meshPeers = libp2p.services.pubsub.getSubscribers(topic).length
+    if (meshPeers > 0) {
+      setStatus('connected', `Connected — topic: ${topic} (${meshPeers} peer${meshPeers > 1 ? 's' : ''} in mesh)`)
+      log(`Peer mesh confirmed — ${meshPeers} peer(s) ready. You can send messages!`, 'success')
+      stopMeshPoll()
+    }
+  }, 1000)
+}
+
+function stopMeshPoll() {
+  if (meshPollInterval) { clearInterval(meshPollInterval); meshPollInterval = null }
+}
+
+// ── Helper: wait for relay/circuit address ────────────────────────────────────
 function waitForWebRTCAddress(timeout = 15000) {
   return new Promise((resolve) => {
     const check = () => {
@@ -252,28 +193,7 @@ function waitForWebRTCAddress(timeout = 15000) {
   })
 }
 
-// ── Helper: wait for at least 1 peer in the gossipsub mesh ────────────────────
-// Polls every 300ms. Resolves when a subscriber appears or after 4s timeout.
-function waitForGossipsubPeer(topic, timeout = 4000) {
-  return new Promise((resolve) => {
-    const interval = setInterval(() => {
-      const subs = libp2p.services.pubsub.getSubscribers(topic)
-      if (subs.length > 0) {
-        clearInterval(interval)
-        clearTimeout(timer)
-        log(`Peer confirmed in mesh — ready to chat!`, 'success')
-        resolve()
-      }
-    }, 300)
-    const timer = setTimeout(() => {
-      clearInterval(interval)
-      log('Peer mesh not confirmed yet — messages may be delayed.', 'warn')
-      resolve()
-    }, timeout)
-  })
-}
-
-// Re-register when addresses change
+// ── Re-register on address change ─────────────────────────────────────────────
 libp2p.addEventListener('self:peer:update', async () => {
   if (!currentTopic) return
   const myAddrs = libp2p.getMultiaddrs().map(ma => ma.toString())
@@ -287,15 +207,138 @@ libp2p.addEventListener('self:peer:update', async () => {
   } catch { /* silent */ }
 })
 
+// ── Connect ───────────────────────────────────────────────────────────────────
+DOM.subscribeButton().onclick = async () => {
+  const topic = DOM.topicInput().value.trim()
+  if (!topic) return
+
+  DOM.subscribeButton().disabled = true
+  DOM.topicInput().disabled = true
+  currentTopic = topic
+  DOM.currentTopic().textContent = topic
+  const endBtn = DOM.endButton()
+  if (endBtn) endBtn.style.display = 'inline-flex'
+
+  setStatus('connecting', 'Connecting to relay…')
+
+  try {
+    // 1. Fetch relay addresses
+    const relayRes = await fetch(`${RELAY_API}/relay`)
+    const { multiaddrs: relayAddrs } = await relayRes.json()
+    if (!relayAddrs || relayAddrs.length === 0) throw new Error('Relay unavailable')
+
+    // 2. Dial relay
+    let connected = false
+    for (const addr of relayAddrs) {
+      try {
+        await libp2p.dial(multiaddr(addr))
+        connected = true
+        log(`Relay connected ✓`, 'success')
+        break
+      } catch (e) {
+        console.warn('[relay dial fail]', addr, e.message)
+      }
+    }
+    if (!connected) throw new Error('Could not connect to relay')
+
+    setStatus('relay', 'Waiting for circuit address…')
+
+    // 3. Wait for circuit relay address
+    await waitForWebRTCAddress()
+
+    // 4. Subscribe gossipsub FIRST before registering
+    libp2p.services.pubsub.subscribe(topic)
+    log(`Subscribed to channel "${topic}"`, 'info')
+
+    // 5. Register self in peer registry
+    const myAddrs = libp2p.getMultiaddrs().map(ma => ma.toString())
+    await fetch(`${RELAY_API}/peers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic, peerId: libp2p.peerId.toString(), multiaddrs: myAddrs })
+    })
+
+    // 6. Find and connect to existing peers
+    const peersRes = await fetch(
+      `${RELAY_API}/peers?topic=${encodeURIComponent(topic)}&exclude=${libp2p.peerId.toString()}`
+    )
+    const { peers } = await peersRes.json()
+
+    if (peers.length === 0) {
+      setStatus('waiting', 'Waiting for others to join…')
+      log('You are the first one here. Share the topic name to invite others.', 'info')
+    } else {
+      log(`Found ${peers.length} peer(s), connecting…`, 'info')
+      for (const peer of peers) {
+        const addrs = [
+          ...peer.multiaddrs.filter(a => a.includes('/webrtc') || a.includes('/p2p-circuit')),
+          ...peer.multiaddrs.filter(a => !a.includes('/webrtc') && !a.includes('/p2p-circuit'))
+        ]
+        for (const addr of addrs) {
+          try { await libp2p.dial(multiaddr(addr)); break } catch { /* silent */ }
+        }
+      }
+      setStatus('relay', 'Peers found — waiting for gossipsub mesh…')
+      log(`Connected to channel "${topic}" ✓`, 'success')
+      log('Peer mesh not confirmed yet — messages may be delayed.', 'warn')
+    }
+
+    // 7. Load message history
+    try {
+      const historyRes = await fetch(`${MESSAGES_API}/messages/${encodeURIComponent(topic)}`)
+      const history = await historyRes.json()
+      if (history.length > 0) {
+        log(`── ${history.length} previous message(s) ──`, 'info')
+        for (const m of history) {
+          const sender = m.peerId === libp2p.peerId.toString() ? 'You' : 'Peer'
+          log(`${sender}: ${m.message}`, m.peerId === libp2p.peerId.toString() ? 'sent' : 'received')
+        }
+      }
+    } catch { /* history optional */ }
+
+    // 8. Enable input
+    DOM.messageInput().disabled = false
+    DOM.sendButton().disabled = false
+    DOM.messageInput().focus()
+
+    // 9. Start polls
+    startPeerPoll(topic)
+    startMeshPoll(topic)
+
+  } catch (err) {
+    console.error('[connect error]', err)
+    setStatus('error', 'Connection failed — try again')
+    log(`Connection failed: ${err.message}`, 'error')
+    resetUI()
+  }
+}
+
+// ── End / Disconnect ──────────────────────────────────────────────────────────
+const endBtn = DOM.endButton()
+if (endBtn) {
+  endBtn.style.display = 'none'
+  endBtn.onclick = async () => {
+    try {
+      if (currentTopic) libp2p.services.pubsub.unsubscribe(currentTopic)
+      for (const peer of libp2p.getPeers()) {
+        try { await libp2p.hangUp(peer) } catch { /* silent */ }
+      }
+    } catch (err) {
+      console.error('[disconnect error]', err)
+    }
+    log('Disconnected from channel.', 'info')
+    resetUI()
+  }
+}
+
 // ── Send message ───────────────────────────────────────────────────────────────
-DOM.sendButton().onclick = async () => {
+async function sendMessage() {
   const topic   = currentTopic
   const message = DOM.messageInput().value.trim()
   if (!topic || !message) return
 
-  // Warn if no peers are in the mesh yet
-  const subscribers = libp2p.services.pubsub.getSubscribers(topic)
-  if (subscribers.length === 0) {
+  const meshPeers = libp2p.services.pubsub.getSubscribers(topic).length
+  if (meshPeers === 0) {
     log('No peers in mesh yet — message may not be delivered. Sending anyway…', 'warn')
   }
 
@@ -304,37 +347,49 @@ DOM.sendButton().onclick = async () => {
     log(`You: ${message}`, 'sent')
     DOM.messageInput().value = ''
 
-    await fetch(`${MESSAGES_API}/messages`, {
+    // Save to backend
+    fetch(`${MESSAGES_API}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ topic, peerId: libp2p.peerId.toString(), message })
     }).catch(() => {})
 
   } catch (err) {
+    console.error('[send error]', err)
     log(`Send failed: ${err.message}`, 'error')
   }
 }
 
-// Send on Enter
+DOM.sendButton().onclick = sendMessage
+
 DOM.messageInput().addEventListener('keydown', e => {
-  if (e.key === 'Enter') DOM.sendButton().click()
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    sendMessage()
+  }
 })
 
 // ── Incoming messages ──────────────────────────────────────────────────────────
 libp2p.services.pubsub.addEventListener('message', event => {
+  if (event.detail.topic !== currentTopic) return
   const message = toString(event.detail.data)
   log(`Peer: ${message}`, 'received')
 })
 
-// ── Topic peer list poll ───────────────────────────────────────────────────────
+// ── Topic peer list UI poll ────────────────────────────────────────────────────
 setInterval(() => {
   if (!currentTopic) return
-  const peers = libp2p.services.pubsub.getSubscribers(currentTopic).map(peerId => {
-    const li = document.createElement('li')
-    li.innerHTML = `<span class="peer-dot"></span>${peerId.toString().slice(0, 20)}…`
-    return li
-  })
+  const peers = libp2p.services.pubsub.getSubscribers(currentTopic)
+  const list = DOM.topicPeerList()
+  if (!list) return
   if (peers.length > 0) {
-    DOM.topicPeerList().replaceChildren(...peers)
+    const items = peers.map(peerId => {
+      const li = document.createElement('li')
+      li.innerHTML = `<span class="peer-dot"></span>${peerId.toString().slice(0, 20)}…`
+      return li
+    })
+    list.replaceChildren(...items)
+  } else {
+    list.innerHTML = '<li class="empty">No peers in mesh yet</li>'
   }
 }, 1000)
