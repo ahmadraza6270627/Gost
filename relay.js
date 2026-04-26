@@ -1,48 +1,172 @@
-import { noise } from '@chainsafe/libp2p-noise'
-import { yamux } from '@chainsafe/libp2p-yamux'
-import { circuitRelayServer } from '@libp2p/circuit-relay-v2'
-import { identify } from '@libp2p/identify'
-import { mplex } from '@libp2p/mplex'
-import { webSockets } from '@libp2p/websockets'
-import * as filters from '@libp2p/websockets/filters'
-import { createLibp2p } from 'libp2p'
 import http from 'http'
+import { randomUUID } from 'crypto'
+import { WebSocketServer, WebSocket } from 'ws'
 
-const RELAY_HOST    = process.env.RELAY_HOST || '0.0.0.0'
-const PORT          = process.env.PORT || 8080
-const PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN || 'localhost'
-const PEER_TTL_MS   = Number(process.env.PEER_TTL_MS || 30000)
+const RELAY_HOST = process.env.RELAY_HOST || '0.0.0.0'
+const PORT = Number(process.env.PORT || 8080)
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '*')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean)
 
-const topicPeers = {}
+const rooms = new Map()
 
-function getFreshPeers(topic) {
-  const cutoff = Date.now() - PEER_TTL_MS
-  topicPeers[topic] = (topicPeers[topic] || []).filter(peer => peer.lastSeen > cutoff)
-
-  if (topicPeers[topic].length === 0) {
-    delete topicPeers[topic]
-    return []
-  }
-
-  return topicPeers[topic]
+function isOriginAllowed(origin = '') {
+  return ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin)
 }
 
-function pruneAllTopics() {
-  for (const topic of Object.keys(topicPeers)) {
-    getFreshPeers(topic)
+function sendJson(ws, payload) {
+  if (ws.readyState !== WebSocket.OPEN) return
+  ws.send(JSON.stringify(payload))
+}
+
+function getRoom(topic) {
+  if (!rooms.has(topic)) rooms.set(topic, new Map())
+  return rooms.get(topic)
+}
+
+function getRoster(topic) {
+  const room = rooms.get(topic)
+  if (!room) return []
+
+  return [...room.values()].map(client => ({
+    clientId: client.clientId,
+    joinedAt: client.joinedAt
+  }))
+}
+
+function broadcast(topic, payload, excludeWs = null) {
+  const room = rooms.get(topic)
+  if (!room) return
+
+  for (const client of room.values()) {
+    if (client.ws === excludeWs) continue
+    sendJson(client.ws, payload)
   }
 }
 
-setInterval(pruneAllTopics, 10000).unref?.()
+function leaveRoom(ws) {
+  if (!ws.topic || !ws.clientId) return
 
-function sendJson(res, status, payload) {
-  res.writeHead(status, { 'Content-Type': 'application/json' })
-  res.end(JSON.stringify(payload))
+  const topic = ws.topic
+  const clientId = ws.clientId
+  const room = rooms.get(topic)
+
+  if (room) {
+    room.delete(clientId)
+
+    if (room.size === 0) {
+      rooms.delete(topic)
+    } else {
+      broadcast(topic, {
+        type: 'peer-left',
+        topic,
+        clientId,
+        peers: getRoster(topic)
+      })
+    }
+  }
+
+  ws.topic = null
+  ws.clientId = null
+}
+
+function joinRoom(ws, topic, clientId) {
+  leaveRoom(ws)
+
+  const room = getRoom(topic)
+  const existing = room.get(clientId)
+
+  if (existing && existing.ws !== ws) {
+    try {
+      existing.ws.close(4000, 'duplicate client')
+    } catch {}
+  }
+
+  ws.topic = topic
+  ws.clientId = clientId
+
+  room.set(clientId, {
+    ws,
+    clientId,
+    joinedAt: Date.now()
+  })
+
+  const peers = getRoster(topic)
+
+  sendJson(ws, {
+    type: 'joined',
+    topic,
+    clientId,
+    peers
+  })
+
+  broadcast(topic, {
+    type: 'peer-joined',
+    topic,
+    clientId,
+    peers
+  }, ws)
+
+  console.log(`[join] topic="${topic}" client=${clientId} roomSize=${room.size}`)
+}
+
+function handleClientMessage(ws, raw) {
+  let msg
+
+  try {
+    msg = JSON.parse(raw.toString())
+  } catch {
+    sendJson(ws, { type: 'error', message: 'Invalid JSON' })
+    return
+  }
+
+  if (msg.type === 'join') {
+    const topic = String(msg.topic || '').trim()
+    const clientId = String(msg.clientId || '').trim()
+
+    if (!topic || !clientId) {
+      sendJson(ws, { type: 'error', message: 'Missing topic or clientId' })
+      return
+    }
+
+    joinRoom(ws, topic, clientId)
+    return
+  }
+
+  if (msg.type === 'message') {
+    if (!ws.topic || !ws.clientId) {
+      sendJson(ws, { type: 'error', message: 'Join a topic before sending messages' })
+      return
+    }
+
+    const text = String(msg.text || '').trim()
+    if (!text) return
+
+    const payload = {
+      type: 'message',
+      topic: ws.topic,
+      messageId: msg.messageId || randomUUID(),
+      from: ws.clientId,
+      text,
+      createdAt: Date.now()
+    }
+
+    broadcast(ws.topic, payload, ws)
+    return
+  }
+
+  if (msg.type === 'ping') {
+    sendJson(ws, { type: 'pong', time: Date.now() })
+    return
+  }
+
+  sendJson(ws, { type: 'error', message: 'Unknown message type' })
 }
 
 const httpServer = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 
   if (req.method === 'OPTIONS') {
@@ -53,107 +177,25 @@ const httpServer = http.createServer((req, res) => {
 
   const url = new URL(req.url, `http://localhost:${PORT}`)
 
-  if (req.method === 'GET' && url.pathname === '/relay') {
-    const multiaddrs = server.getMultiaddrs().map(ma => ma.toString())
-    sendJson(res, 200, { multiaddrs })
+  if (req.method === 'GET' && url.pathname === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      ok: true,
+      mode: 'websocket-hub',
+      rooms: rooms.size
+    }))
     return
   }
 
-  if (req.method === 'GET' && url.pathname === '/peers') {
-    const topic = url.searchParams.get('topic')
-    const exclude = url.searchParams.get('exclude')
+  if (req.method === 'GET' && url.pathname === '/rooms') {
+    const data = [...rooms.entries()].map(([topic, clients]) => ({
+      topic,
+      count: clients.size,
+      peers: getRoster(topic)
+    }))
 
-    if (!topic) {
-      res.writeHead(400)
-      res.end('missing topic')
-      return
-    }
-
-    const peers = getFreshPeers(topic)
-      .filter(peer => peer.peerId !== exclude)
-      .map(({ peerId, multiaddrs, lastSeen }) => ({
-        peerId,
-        multiaddrs,
-        lastSeen
-      }))
-
-    sendJson(res, 200, { peers })
-    return
-  }
-
-  if (req.method === 'POST' && url.pathname === '/peers') {
-    let body = ''
-
-    req.on('data', chunk => {
-      body += chunk
-    })
-
-    req.on('end', () => {
-      try {
-        const { topic, peerId, multiaddrs } = JSON.parse(body)
-
-        if (!topic || !peerId || !Array.isArray(multiaddrs)) {
-          res.writeHead(400)
-          res.end('bad body')
-          return
-        }
-
-        const circuitAddrs = multiaddrs.filter(addr =>
-          typeof addr === 'string' && addr.includes('/p2p-circuit')
-        )
-
-        if (circuitAddrs.length === 0) {
-          res.writeHead(400)
-          res.end('peer has no /p2p-circuit address yet')
-          return
-        }
-
-        getFreshPeers(topic)
-
-        if (!topicPeers[topic]) topicPeers[topic] = []
-
-        const existing = topicPeers[topic].find(peer => peer.peerId === peerId)
-
-        if (existing) {
-          existing.multiaddrs = circuitAddrs
-          existing.lastSeen = Date.now()
-        } else {
-          topicPeers[topic].push({
-            peerId,
-            multiaddrs: circuitAddrs,
-            lastSeen: Date.now()
-          })
-        }
-
-        console.log(`[registry] topic="${topic}" peer=${peerId} addrs=${circuitAddrs.length}`)
-        sendJson(res, 200, { ok: true })
-      } catch {
-        res.writeHead(400)
-        res.end('invalid json')
-      }
-    })
-
-    return
-  }
-
-  if (req.method === 'DELETE' && url.pathname === '/peers') {
-    const topic = url.searchParams.get('topic')
-    const peerId = url.searchParams.get('peerId')
-
-    if (!topic || !peerId) {
-      res.writeHead(400)
-      res.end('missing topic or peerId')
-      return
-    }
-
-    topicPeers[topic] = (topicPeers[topic] || []).filter(peer => peer.peerId !== peerId)
-
-    if (topicPeers[topic].length === 0) {
-      delete topicPeers[topic]
-    }
-
-    console.log(`[registry:delete] topic="${topic}" peer=${peerId}`)
-    sendJson(res, 200, { ok: true })
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ rooms: data }))
     return
   }
 
@@ -161,37 +203,42 @@ const httpServer = http.createServer((req, res) => {
   res.end('not found')
 })
 
-httpServer.listen(PORT, RELAY_HOST, async () => {
-  console.log(`HTTP API → port ${PORT}`)
-})
-
-const server = await createLibp2p({
-  addresses: {
-    listen: [`/ip4/${RELAY_HOST}/tcp/${PORT}/ws`],
-    announce: [`/dns4/${PUBLIC_DOMAIN}/tcp/443/wss`]
-  },
-  transports: [
-    webSockets({
-      filter: filters.all,
-      server: httpServer
-    })
-  ],
-  connectionEncryption: [noise()],
-  streamMuxers: [yamux(), mplex()],
-  services: {
-    identify: identify(),
-    relay: circuitRelayServer({
-      reservations: {
-        maxReservations: Infinity
-      }
-    })
-  },
-  connectionManager: {
-    minConnections: 0
+const wss = new WebSocketServer({
+  server: httpServer,
+  maxPayload: 64 * 1024,
+  verifyClient: ({ origin }, done) => {
+    if (isOriginAllowed(origin)) return done(true)
+    done(false, 403, 'Forbidden origin')
   }
 })
 
-await server.start()
+wss.on('connection', (ws, req) => {
+  ws.isAlive = true
 
-const relayMultiaddrs = server.getMultiaddrs().map(ma => ma.toString())
-console.log('Relay listening on:', relayMultiaddrs)
+  ws.on('pong', () => {
+    ws.isAlive = true
+  })
+
+  ws.on('message', raw => handleClientMessage(ws, raw))
+  ws.on('close', () => leaveRoom(ws))
+  ws.on('error', () => leaveRoom(ws))
+
+  console.log(`[ws] connected from ${req.socket.remoteAddress}`)
+})
+
+setInterval(() => {
+  for (const ws of wss.clients) {
+    if (!ws.isAlive) {
+      leaveRoom(ws)
+      ws.terminate()
+      continue
+    }
+
+    ws.isAlive = false
+    ws.ping()
+  }
+}, 30_000)
+
+httpServer.listen(PORT, RELAY_HOST, () => {
+  console.log(`WebSocket hub relay listening on ${RELAY_HOST}:${PORT}`)
+})

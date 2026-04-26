@@ -1,474 +1,370 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>gost — P2P</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@300;400;500&family=Outfit:wght@300;400;500&display=swap" rel="stylesheet">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>gost — Relay Hub</title>
+
   <style>
-    :root {
-      --bg:           #040d12;
-      --surface:      #071820;
-      --surface2:     #0c2233;
-      --surface3:     #103048;
-      --border:       rgba(0,220,180,0.08);
-      --border2:      rgba(0,220,180,0.15);
-      --accent:       #00dcc0;
-      --accent-dim:   #009f8c;
-      --accent-glow:  rgba(0,220,192,0.15);
-      --accent2:      #00aaff;
-      --accent2-glow: rgba(0,170,255,0.1);
-      --violet:       #7c6fcd;
-      --violet-dim:   #5c5098;
-      --warn:         #ffaa44;
-      --error:        #ff5566;
-      --text:         #d0eae6;
-      --text2:        #5a9a90;
-      --text3:        #2e5c54;
-      --mono:         'IBM Plex Mono', monospace;
-      --display:      'Syne', sans-serif;
-      --body:         'Outfit', sans-serif;
-      --header-h:     56px;
-      --status-h:     36px;
-      --sidebar-w:    220px;
+    * {
+      box-sizing: border-box;
     }
 
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--body); overflow: hidden; }
-
-    body::before {
-      content: ''; position: fixed; inset: 0; z-index: 0;
-      background:
-        radial-gradient(ellipse 70% 50% at 0% 100%, rgba(0,220,192,0.04) 0%, transparent 55%),
-        radial-gradient(ellipse 50% 40% at 100% 0%, rgba(0,170,255,0.05) 0%, transparent 50%),
-        linear-gradient(180deg, #040d12 0%, #020a10 100%);
-      pointer-events: none;
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #040d12;
+      color: #d8f0ec;
+      font-family: Arial, sans-serif;
     }
-
-    body::after {
-      content: ''; position: fixed; inset: 0; z-index: 0;
-      background-image: linear-gradient(rgba(0,220,192,0.015) 1px, transparent 1px), linear-gradient(90deg, rgba(0,220,192,0.015) 1px, transparent 1px);
-      background-size: 32px 32px;
-      mask-image: radial-gradient(ellipse 80% 80% at 30% 50%, black 40%, transparent 100%);
-      pointer-events: none;
-    }
-
-    ::-webkit-scrollbar { width: 3px; height: 3px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
 
     header {
-      position: relative; z-index: 10; height: var(--header-h);
-      background: var(--surface); border-bottom: 1px solid var(--border2);
-      display: flex; align-items: center; padding: 0 clamp(12px, 3vw, 22px); gap: clamp(8px, 2vw, 16px);
-    }
-    header::before {
-      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
-      background: linear-gradient(90deg, transparent 0%, var(--accent) 30%, var(--accent2) 70%, transparent 100%);
-      opacity: 0.5;
-    }
-
-    .brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-    .brand-mark {
-      width: 32px; height: 32px; border: 1px solid rgba(0,220,192,0.25); border-radius: 6px;
-      background: rgba(0,220,192,0.05); display: flex; align-items: center; justify-content: center;
-      position: relative; overflow: hidden;
-    }
-    .brand-mark::after { content: ''; position: absolute; inset: 0; background: linear-gradient(135deg, rgba(0,220,192,0.1) 0%, transparent 60%); }
-    .brand-mark svg { width: 15px; height: 15px; fill: var(--accent); position: relative; z-index: 1; }
-    .brand-name { font-family: var(--display); font-size: 18px; font-weight: 800; color: var(--text); letter-spacing: 0.08em; text-transform: uppercase; }
-    .h-divider { width: 1px; height: 22px; background: var(--border2); flex-shrink: 0; }
-
-    .enc-pill {
-      display: flex; align-items: center; gap: 6px; padding: 4px 10px 4px 8px;
-      background: rgba(0,220,192,0.05); border: 1px solid rgba(0,220,192,0.12); border-radius: 20px; flex-shrink: 0;
-    }
-    .enc-pill-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent); animation: pulseDot 2.8s ease-in-out infinite; }
-    @keyframes pulseDot { 0%,100%{opacity:1; box-shadow: 0 0 6px var(--accent);} 50%{opacity:.25; box-shadow:none;} }
-    .enc-pill span { font-family: var(--mono); font-size: 8.5px; color: rgba(0,220,192,0.75); letter-spacing: 0.1em; white-space: nowrap; }
-
-    .peer-id-wrap { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-    .peer-id-lbl { font-family: var(--mono); font-size: 8px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.14em; flex-shrink: 0; }
-    .peer-id-chip {
-      font-family: var(--mono); font-size: 10px; color: var(--text2);
-      background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px;
-      max-width: clamp(100px, 20vw, 200px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      cursor: pointer; transition: border-color .2s, color .2s;
-    }
-    .peer-id-chip:hover { border-color: rgba(0,220,192,0.3); color: var(--text); }
-
-    .status-bar {
-      position: relative; z-index: 9; height: var(--status-h);
-      background: rgba(4,13,18,0.8); border-bottom: 1px solid var(--border);
-      display: flex; align-items: center; padding: 0 clamp(12px, 3vw, 22px); gap: 9px; backdrop-filter: blur(4px);
-    }
-    .s-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; transition: background .3s; }
-    .dot-idle       { background: var(--text3); }
-    .dot-connecting { background: var(--warn); animation: dotFlash 1s infinite; }
-    .dot-relay      { background: var(--violet); animation: dotFlash 1s infinite; }
-    .dot-waiting    { background: var(--warn); }
-    .dot-connected  { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
-    .dot-error      { background: var(--error); }
-    @keyframes dotFlash { 0%,100%{opacity:1;} 50%{opacity:.15;} }
-    #status-text { font-family: var(--mono); font-size: 10.5px; color: var(--text2); }
-
-    .topic-info { margin-left: auto; display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 9px; color: var(--text3); letter-spacing: 0.08em; }
-    .topic-chip { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 2px 10px; font-size: 10px; color: var(--accent2); font-family: var(--mono); }
-
-    .app-body {
-      position: relative; z-index: 1;
-      display: grid; grid-template-columns: 1fr var(--sidebar-w);
-      height: calc(100vh - var(--header-h) - var(--status-h)); overflow: hidden;
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      border-bottom: 1px solid rgba(0, 220, 192, 0.18);
+      background: #071820;
     }
 
-    .center { display: flex; flex-direction: column; overflow: hidden; }
-
-    .topic-bar { padding: clamp(10px, 2vw, 14px) clamp(12px, 2.5vw, 20px); border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
-    .topic-bar-label { font-family: var(--mono); font-size: 8px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--text3); margin-bottom: 8px; }
-    .topic-row { display: flex; gap: 8px; align-items: center; }
-    .topic-input-wrap { flex: 1; position: relative; }
-    .topic-input-wrap svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); width: 12px; height: 12px; fill: none; stroke: var(--text3); stroke-width: 2; pointer-events: none; }
-
-    input[type="text"] {
-      background: var(--input-bg, var(--bg)); border: 1px solid var(--border2);
-      border-radius: 4px; color: var(--text); font-family: var(--mono);
-      font-size: 12px; font-weight: 300; padding: 9px 13px 9px 32px;
-      outline: none; transition: border-color .2s, box-shadow .2s; width: 100%;
+    .brand {
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      color: #00dcc0;
     }
-    input[type="text"]:focus { border-color: rgba(0,170,255,0.4); box-shadow: 0 0 0 3px var(--accent2-glow); }
-    input[type="text"]:disabled { opacity: .3; cursor: not-allowed; }
-    input[type="text"]::placeholder { color: var(--text3); }
 
-    .btn {
-      background: var(--surface2); border: 1px solid var(--border2); border-radius: 4px;
-      color: var(--text2); font-family: var(--mono); font-size: 9.5px; padding: 9px 14px;
-      cursor: pointer; transition: all .15s; white-space: nowrap; letter-spacing: 0.08em; text-transform: uppercase;
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: #8fcfc5;
     }
-    .btn:hover:not(:disabled) { border-color: var(--text2); color: var(--text); }
-    .btn:disabled { opacity: .2; cursor: not-allowed; }
 
-    .btn-connect {
-      background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
-      border-color: transparent; color: #040d12; font-weight: 500;
-      font-family: var(--display); font-size: 10px; letter-spacing: 0.1em;
+    .s-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #555;
     }
-    .btn-connect:hover:not(:disabled) { opacity: 0.85; box-shadow: 0 4px 20px rgba(0,220,192,0.3); }
 
-    .btn-end {
-      background: rgba(255,85,102,0.1); border-color: rgba(255,85,102,0.3);
-      color: #ff8899; font-family: var(--display); font-size: 10px; letter-spacing: 0.1em;
-      display: none;
+    .dot-idle {
+      background: #777;
     }
-    .btn-end:hover:not(:disabled) { background: rgba(255,85,102,0.2); border-color: rgba(255,85,102,0.5); }
 
-    .messages-area {
-      flex: 1; overflow-y: auto;
-      padding: clamp(10px, 2vw, 16px) clamp(10px, 2.5vw, 18px);
-      display: flex; flex-direction: column; gap: 2px;
+    .dot-connecting,
+    .dot-waiting {
+      background: #ffaa44;
+    }
+
+    .dot-connected {
+      background: #00dcc0;
+      box-shadow: 0 0 10px #00dcc0;
+    }
+
+    .dot-error {
+      background: #ff5566;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: 1fr 260px;
+      gap: 16px;
+      padding: 16px;
+      height: calc(100vh - 64px);
+    }
+
+    .panel {
+      background: #071820;
+      border: 1px solid rgba(0, 220, 192, 0.16);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .chat {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .topic-bar {
+      display: flex;
+      gap: 8px;
+      padding: 14px;
+      border-bottom: 1px solid rgba(0, 220, 192, 0.12);
+    }
+
+    input {
+      width: 100%;
+      background: #030e14;
+      border: 1px solid rgba(0, 220, 192, 0.18);
+      color: #d8f0ec;
+      border-radius: 8px;
+      padding: 12px;
+      outline: none;
+    }
+
+    input:focus {
+      border-color: #00dcc0;
+    }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 0 16px;
+      background: #00dcc0;
+      color: #03100e;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    #end-button {
+      background: #ff5566;
+      color: white;
+    }
+
+    #output {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px;
+      font-family: monospace;
+      font-size: 13px;
     }
 
     .log-line {
-      padding: 4px 10px; border-radius: 4px; font-family: var(--mono);
-      font-size: 11px; line-height: 1.55; word-break: break-word;
-      display: flex; align-items: flex-start; gap: 10px; animation: msgIn .18s ease-out;
+      margin-bottom: 8px;
+      line-height: 1.4;
+      word-break: break-word;
     }
-    @keyframes msgIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-    .log-time { font-size: 9px; color: var(--text3); flex-shrink: 0; padding-top: 1px; min-width: 38px; }
-    .log-content { flex: 1; }
-    .log-info    { color: var(--text2); }
-    .log-success { color: rgba(0,220,192,0.8); }
-    .log-warn    { color: var(--warn); }
-    .log-error { background: rgba(255,85,102,0.05); border: 1px solid rgba(255,85,102,0.15); color: #ff8899; padding: 8px 12px; border-radius: 4px; }
-    .log-sent { background: rgba(0,170,255,0.06); border: 1px solid rgba(0,170,255,0.12); color: #80ccff; padding: 7px 12px; margin: 2px 0; }
-    .log-sent .log-content::before { content: '↑ sent'; font-size: 8px; color: rgba(0,170,255,0.55); letter-spacing: 0.1em; text-transform: uppercase; display: block; margin-bottom: 3px; }
-    .log-received { background: rgba(0,220,192,0.04); border: 1px solid rgba(0,220,192,0.10); color: #80ddd0; padding: 7px 12px; margin: 2px 0; }
-    .log-received .log-content::before { content: '↓ recv'; font-size: 8px; color: rgba(0,220,192,0.45); letter-spacing: 0.1em; text-transform: uppercase; display: block; margin-bottom: 3px; }
-    .log-system { color: var(--text3); font-size: 10px; padding: 5px 10px; border-left: 2px solid var(--border2); }
-    .log-separator { display: flex; align-items: center; gap: 10px; padding: 8px 4px; }
-    .log-separator-line { flex: 1; height: 1px; background: var(--border); }
-    .log-separator-text { font-family: var(--mono); font-size: 8px; color: var(--text3); white-space: nowrap; letter-spacing: 0.12em; text-transform: uppercase; }
 
-    .input-area {
-      padding: clamp(8px, 2vw, 12px) clamp(10px, 2.5vw, 18px);
-      border-top: 1px solid var(--border); background: var(--surface);
-      display: flex; flex-direction: column; gap: 6px; flex-shrink: 0;
+    .log-time {
+      color: #4a7a72;
+      margin-right: 8px;
     }
-    .input-row { display: flex; gap: 8px; align-items: center; }
-    .msg-input-wrap { flex: 1; position: relative; }
-    .msg-input-wrap svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); width: 13px; height: 13px; fill: none; stroke: var(--text3); stroke-width: 2; pointer-events: none; }
-    #message-input { padding: 10px 13px 10px 34px; font-family: var(--body); font-size: 13px; font-weight: 300; border-radius: 4px; border-color: var(--border2); }
-    #message-input:focus { border-color: rgba(0,220,192,0.35); box-shadow: 0 0 0 3px var(--accent-glow); }
 
-    .btn-send {
-      background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
-      border-color: transparent; color: #040d12; font-weight: 600;
-      padding: 10px 18px; font-size: 9.5px; border-radius: 4px;
-      display: flex; align-items: center; gap: 7px;
-      font-family: var(--display); letter-spacing: 0.1em; cursor: pointer;
+    .log-info {
+      color: #8fcfc5;
     }
-    .btn-send:hover:not(:disabled) { opacity: 0.85; box-shadow: 0 4px 18px rgba(0,220,192,0.3); }
-    .btn-send:disabled { opacity: .2; cursor: not-allowed; }
-    .btn-send svg { width: 12px; height: 12px; fill: #040d12; flex-shrink: 0; }
 
-    .input-meta { display: flex; align-items: center; gap: 8px; }
-    .enc-indicator { display: flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 8px; color: var(--text3); letter-spacing: 0.06em; }
-    .enc-indicator svg { width: 9px; height: 9px; fill: var(--accent-dim); }
-    .char-count { margin-left: auto; font-family: var(--mono); font-size: 9px; color: var(--text3); }
-
-    .right-panel { border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; background: var(--surface); position: relative; }
-    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); border-bottom: 1px solid var(--border); flex-shrink: 0; }
-    .stat-cell { background: var(--surface); padding: clamp(10px, 2vw, 14px); display: flex; flex-direction: column; gap: 4px; }
-    .stat-value { font-family: var(--display); font-size: 22px; font-weight: 800; color: var(--accent); line-height: 1; }
-    .stat-label { font-family: var(--mono); font-size: 7px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--text3); }
-
-    .r-section { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
-    .r-header { padding: 10px 14px; display: flex; align-items: center; gap: 7px; border-bottom: 1px solid var(--border); background: var(--surface2); flex-shrink: 0; }
-    .r-header svg { width: 10px; height: 10px; fill: var(--text3); flex-shrink: 0; }
-    .r-title { font-family: var(--mono); font-size: 8px; text-transform: uppercase; letter-spacing: 0.15em; color: var(--text3); flex: 1; }
-    .r-count { background: var(--border2); color: var(--text2); font-family: var(--mono); font-size: 8px; padding: 1px 7px; border-radius: 8px; }
-    .r-list { list-style: none; padding: 7px; overflow-y: auto; flex: 1; }
-    .r-list li { padding: 6px 9px; border-radius: 3px; font-family: var(--mono); font-size: 9px; color: var(--text3); word-break: break-all; line-height: 1.5; transition: background .12s; cursor: default; }
-    .r-list li:hover { background: var(--surface2); color: var(--text2); }
-    .r-list li.empty { font-style: italic; pointer-events: none; }
-    .peer-dot { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); margin-right: 6px; box-shadow: 0 0 5px var(--accent); }
-
-    .crypto-section { border-top: 1px solid var(--border); padding: clamp(10px, 2vw, 13px) 14px; flex-shrink: 0; background: rgba(0,220,192,0.02); }
-    .crypto-title { font-family: var(--display); font-size: 9px; text-transform: uppercase; letter-spacing: 0.18em; color: var(--text2); margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
-    .crypto-title svg { width: 9px; height: 9px; fill: var(--accent); }
-    .crypto-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-    .crypto-key { font-family: var(--mono); font-size: 8px; color: var(--text3); }
-    .crypto-val { font-family: var(--mono); font-size: 8px; color: var(--accent); background: var(--surface2); padding: 2px 7px; border-radius: 3px; border: 1px solid rgba(0,220,192,0.1); }
-
-    @media (max-width: 640px) {
-      :root { --sidebar-w: 0px; --header-h: 52px; --status-h: 32px; }
-      .right-panel { display: none; }
-      .app-body { grid-template-columns: 1fr; }
-      .enc-pill span { display: none; }
-      .enc-pill { padding: 4px 8px; }
-      .h-divider { display: none; }
-      .peer-id-lbl { display: none; }
-      .topic-info .topic-chip { max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
-      .mobile-stats { display: flex; gap: 1px; background: var(--border); border-bottom: 1px solid var(--border); flex-shrink: 0; }
-      .mobile-stat { flex: 1; background: var(--surface); padding: 8px 12px; display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 9px; color: var(--text2); }
-      .mobile-stat-val { font-family: var(--display); font-size: 16px; font-weight: 800; color: var(--accent); line-height: 1; }
+    .log-success {
+      color: #00dcc0;
     }
-    @media (min-width: 641px) { .mobile-stats { display: none; } }
-    @media (max-width: 900px) and (min-width: 641px) { :root { --sidebar-w: 180px; } .stat-value { font-size: 18px; } }
+
+    .log-sent {
+      color: #00aaff;
+    }
+
+    .log-received {
+      color: #d8f0ec;
+    }
+
+    .log-error {
+      color: #ff5566;
+    }
+
+    .log-warn {
+      color: #ffaa44;
+    }
+
+    .message-bar {
+      display: flex;
+      gap: 8px;
+      padding: 14px;
+      border-top: 1px solid rgba(0, 220, 192, 0.12);
+    }
+
+    aside {
+      padding: 14px;
+    }
+
+    .side-title {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: #00dcc0;
+      margin-bottom: 10px;
+    }
+
+    .chip {
+      background: #030e14;
+      border: 1px solid rgba(0, 220, 192, 0.12);
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 12px;
+      font-family: monospace;
+      font-size: 12px;
+      word-break: break-all;
+      color: #8fcfc5;
+    }
+
+    #topic-peers {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    #topic-peers li {
+      padding: 8px;
+      border-bottom: 1px solid rgba(0, 220, 192, 0.08);
+      font-family: monospace;
+      font-size: 12px;
+    }
+
+    .empty {
+      color: #4a7a72;
+    }
+
+    .peer-dot {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #00dcc0;
+      margin-right: 8px;
+    }
+
+    .meta {
+      font-size: 12px;
+      color: #4a7a72;
+      margin-top: 10px;
+    }
+
+    @media (max-width: 800px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+
+      aside {
+        display: none;
+      }
+    }
   </style>
 </head>
+
 <body>
+  <header>
+    <div class="brand">GOST</div>
 
-<header>
-  <div class="brand">
-    <div class="brand-mark">
-      <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 4l5 2.18V11c0 3.46-2.38 6.66-5 7.7C9.38 17.66 7 14.46 7 11V7.18L12 5zm-1 3v4h2V8h-2zm0 5v2h2v-2h-2z"/></svg>
+    <div class="status">
+      <span class="s-dot dot-idle" id="status-dot"></span>
+      <span id="status-text">Idle</span>
     </div>
-    <span class="brand-name">gost</span>
-  </div>
-  <div class="h-divider"></div>
-  <div class="enc-pill">
-    <div class="enc-pill-dot"></div>
-    <span>E2E Encrypted · Anonymous</span>
-  </div>
-  <div class="peer-id-wrap">
-    <span class="peer-id-lbl">Your ID</span>
-    <div class="peer-id-chip" id="peer-id" title="Click to copy" onclick="copyPeerId(this)">Initializing…</div>
-  </div>
-</header>
+  </header>
 
-<div class="status-bar">
-  <div class="s-dot dot-idle" id="status-dot"></div>
-  <span id="status-text">Idle — enter a topic to connect</span>
-  <div class="topic-info">
-    <span>Topic</span>
-    <span class="topic-chip" id="current-topic">—</span>
-  </div>
-</div>
+  <main>
+    <section class="panel chat">
+      <div class="topic-bar">
+        <input id="topic-input" placeholder="Enter topic, e.g. global-chat" />
+        <button id="subscribe-button">Connect</button>
+        <button id="end-button" style="display:none;">Disconnect</button>
+      </div>
 
-<div class="app-body">
-  <section class="center">
-    <div class="mobile-stats">
-      <div class="mobile-stat">
-        <div>
-          <div class="mobile-stat-val" id="mob-peers">0</div>
-          <div style="font-size:7px;letter-spacing:.1em;text-transform:uppercase;color:var(--text3);">Peers</div>
+      <div id="output">
+        <div class="log-line log-info">
+          <span class="log-time" id="init-time"></span>
+          <span class="log-content">Ready. Enter topic and connect.</span>
         </div>
       </div>
-      <div class="mobile-stat">
-        <div>
-          <div class="mobile-stat-val" id="mob-msgs">0</div>
-          <div style="font-size:7px;letter-spacing:.1em;text-transform:uppercase;color:var(--text3);">Msgs</div>
-        </div>
-      </div>
-    </div>
 
-    <div class="topic-bar">
-      <div class="topic-bar-label">Connect to a channel</div>
-      <div class="topic-row">
-        <div class="topic-input-wrap">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14"/></svg>
-          <input type="text" id="topic-input" placeholder="e.g. global-chat, room-42, secret-channel…">
-        </div>
-        <button class="btn btn-connect" id="subscribe-button">Connect</button>
-        <button class="btn btn-end" id="end-button">Disconnect</button>
+      <div class="message-bar">
+        <input id="message-input" placeholder="Type message..." disabled maxlength="500" />
+        <button id="send-button" disabled>Send</button>
       </div>
-    </div>
+    </section>
 
-    <div class="messages-area" id="output">
-      <div class="log-separator">
-        <div class="log-separator-line"></div>
-        <span class="log-separator-text">Session started</span>
-        <div class="log-separator-line"></div>
-      </div>
-      <div class="log-line log-info">
-        <span class="log-time" id="init-time"></span>
-        <span class="log-content">Ready. Enter a topic name and click Connect — the relay and peer chain will be set up automatically.</span>
-      </div>
-    </div>
+    <aside class="panel">
+      <div class="side-title">Current Topic</div>
+      <div class="chip" id="current-topic">—</div>
 
-    <div class="input-area">
-      <div class="input-row">
-        <div class="msg-input-wrap">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
-          <input type="text" id="message-input" placeholder="Type an encrypted message… (Enter to send)" disabled>
-        </div>
-        <button class="btn btn-send" id="send-button" disabled>
-          <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-          Send
-        </button>
-      </div>
-      <div class="input-meta">
-        <div class="enc-indicator">
-          <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
-          Messages are end-to-end encrypted
-        </div>
-        <span class="char-count" id="char-count">0 / 500</span>
-      </div>
-    </div>
-  </section>
+      <div class="side-title">Client ID</div>
+      <div class="chip" id="peer-id" onclick="copyPeerId(this)">Initializing…</div>
 
-  <aside class="right-panel">
-    <div class="stats-grid">
-      <div class="stat-cell">
-        <div class="stat-value" id="stat-peers">0</div>
-        <div class="stat-label">Peers</div>
-      </div>
-      <div class="stat-cell">
-        <div class="stat-value" id="stat-msgs">0</div>
-        <div class="stat-label">Messages</div>
-      </div>
-    </div>
-
-    <div class="r-section">
-      <div class="r-header">
-        <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-        <span class="r-title">Topic Peers</span>
-        <span class="r-count" id="topic-peer-count">0</span>
-      </div>
-      <ul class="r-list" id="topic-peers">
+      <div class="side-title">Online Clients</div>
+      <ul id="topic-peers">
         <li class="empty">Subscribe first</li>
       </ul>
-    </div>
 
-    <div class="crypto-section">
-      <div class="crypto-title">
-        <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>
-        Encryption
+      <div class="meta">
+        Mode: WebSocket Relay Hub<br />
+        Transport: WSS/TLS<br />
+        P2P dialing: disabled
       </div>
-      <div class="crypto-row"><span class="crypto-key">Protocol</span><span class="crypto-val">Noise_XX</span></div>
-      <div class="crypto-row"><span class="crypto-key">Cipher</span><span class="crypto-val">AES-256-GCM</span></div>
-      <div class="crypto-row"><span class="crypto-key">Transport</span><span class="crypto-val">libp2p</span></div>
-      <div class="crypto-row"><span class="crypto-key">Relay</span><span class="crypto-val" id="relay-status">Pending</span></div>
-    </div>
-  </aside>
-</div>
+    </aside>
+  </main>
 
-<script>
-  /* ── Init time ── */
-  const initTimeEl = document.getElementById('init-time');
-  if (initTimeEl) initTimeEl.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-  /* ── Auth guard ── */
-  if (!sessionStorage.getItem('authToken')) { sessionStorage.clear(); window.location.href = '/index.html'; }
-
-  /* ── Peer ID ── */
-  let _realPeerId = '';
-  window.setPeerId = function(fullId) {
-    _realPeerId = fullId;
-    const chip = document.getElementById('peer-id');
-    chip.textContent = fullId && fullId.length > 12 ? fullId.slice(0, 6) + '…' + fullId.slice(-4) : (fullId || 'Unknown');
-  };
-  function copyPeerId(el) {
-    const toCopy = _realPeerId || el.textContent;
-    if (toCopy && toCopy !== 'Initializing…') {
-      navigator.clipboard.writeText(toCopy).then(() => {
-        const orig = el.textContent;
-        el.textContent = 'Copied!'; el.style.color = 'var(--accent)';
-        setTimeout(() => { el.textContent = orig; el.style.color = ''; }, 1200);
-      });
+  <script>
+    const initTimeEl = document.getElementById('init-time')
+    if (initTimeEl) {
+      initTimeEl.textContent = new Date().toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit'
+      })
     }
-  }
 
-  /* ── Char counter ── */
-  const msgInput  = document.getElementById('message-input');
-  const charCount = document.getElementById('char-count');
-  msgInput.addEventListener('input', () => { charCount.textContent = msgInput.value.length + ' / 500'; });
-  window.updateCharCount = () => { charCount.textContent = msgInput.value.length + ' / 500'; };
-
-  /* ── Peer & message counters ── */
-  const topicList  = document.getElementById('topic-peers');
-  const topicCount = document.getElementById('topic-peer-count');
-  const statPeers  = document.getElementById('stat-peers');
-  const statMsgs   = document.getElementById('stat-msgs');
-  const mobPeers   = document.getElementById('mob-peers');
-  const mobMsgs    = document.getElementById('mob-msgs');
-  const outputEl   = document.getElementById('output');
-
-  new MutationObserver(() => {
-    const tc = topicList.querySelectorAll('li:not(.empty)').length;
-    topicCount.textContent = tc; statPeers.textContent = tc;
-    if (mobPeers) mobPeers.textContent = tc;
-  }).observe(topicList, { childList: true });
-
-  new MutationObserver(() => {
-    const msgs = outputEl.querySelectorAll('.log-sent, .log-received').length;
-    statMsgs.textContent = msgs;
-    if (mobMsgs) mobMsgs.textContent = msgs;
-  }).observe(outputEl, { childList: true, subtree: true });
-
-  /* ── addLog — shows ALL message types including errors ── */
-  window.addLog = function(text, type = 'info') {
-    const line = document.createElement('div');
-    line.className = 'log-line log-' + type;
-    const t = document.createElement('span');
-    t.className = 'log-time';
-    t.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const c = document.createElement('span');
-    c.className = 'log-content';
-    c.textContent = text;
-    line.appendChild(t);
-    line.appendChild(c);
-    outputEl.appendChild(line);
-    outputEl.scrollTop = outputEl.scrollHeight;
-  };
-
-  /* ── setStatus ── */
-  const relayStatus = document.getElementById('relay-status');
-  window.setStatus = function(state, msg) {
-    document.getElementById('status-text').textContent = msg;
-    document.getElementById('status-dot').className = 's-dot dot-' + (state || 'idle');
-    if (state === 'relay' || state === 'connected') {
-      relayStatus.textContent = 'Active';
-      relayStatus.style.color = 'var(--accent)';
-    } else if (state === 'idle' || state === 'error') {
-      relayStatus.textContent = 'Pending';
-      relayStatus.style.color = '';
+    if (!sessionStorage.getItem('authToken')) {
+      sessionStorage.clear()
+      window.location.href = '/index.html'
     }
-  };
-</script>
 
-<script type="module" src="./index.js"></script>
+    let _realPeerId = ''
+
+    window.setPeerId = function (fullId) {
+      _realPeerId = fullId
+      const chip = document.getElementById('peer-id')
+      chip.textContent = fullId && fullId.length > 12
+        ? fullId.slice(0, 6) + '…' + fullId.slice(-4)
+        : fullId || 'Unknown'
+    }
+
+    function copyPeerId(el) {
+      const toCopy = _realPeerId || el.textContent
+
+      if (toCopy && toCopy !== 'Initializing…') {
+        navigator.clipboard.writeText(toCopy).then(() => {
+          const orig = el.textContent
+          el.textContent = 'Copied!'
+          setTimeout(() => {
+            el.textContent = orig
+          }, 1200)
+        })
+      }
+    }
+
+    window.addLog = function (text, type = 'info') {
+      const outputEl = document.getElementById('output')
+
+      const line = document.createElement('div')
+      line.className = 'log-line log-' + type
+
+      const t = document.createElement('span')
+      t.className = 'log-time'
+      t.textContent = new Date().toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+
+      const c = document.createElement('span')
+      c.className = 'log-content'
+      c.textContent = text
+
+      line.appendChild(t)
+      line.appendChild(c)
+      outputEl.appendChild(line)
+      outputEl.scrollTop = outputEl.scrollHeight
+    }
+
+    window.setStatus = function (state, msg) {
+      document.getElementById('status-text').textContent = msg
+      document.getElementById('status-dot').className = 's-dot dot-' + (state || 'idle')
+    }
+  </script>
+
+  <script type="module" src="./index.js"></script>
 </body>
 </html>
