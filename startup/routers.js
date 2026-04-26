@@ -1,4 +1,3 @@
-import { ActiveSession } from '../models/activeSession.js'
 import { error } from '../middleware/error.js';
 import { user } from "../routers/user.js";
 import { auth } from "../routers/auth.js";
@@ -57,17 +56,6 @@ export function routers(app) {
     app.get('/dashboard', requireAuth, (req, res) => {
         res.sendFile(path.resolve("./p2p.html"));
     });
-
-    app.post('/api/check-session', async (req, res) => {
-        try {
-            const { sessionId } = req.body
-            if (!sessionId) return res.json({ valid: false })
-            const active = await ActiveSession.findOne({ sessionId })
-            res.json({ valid: !!active })
-        } catch {
-            res.json({ valid: false })
-        }
-    })
 
     app.post('/messages', async (req, res) => {
         try {
