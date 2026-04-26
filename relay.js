@@ -22,10 +22,7 @@ function sendJson(ws, payload) {
 }
 
 function getRoom(roomId) {
-  if (!rooms.has(roomId)) {
-    rooms.set(roomId, new Set())
-  }
-
+  if (!rooms.has(roomId)) rooms.set(roomId, new Set())
   return rooms.get(roomId)
 }
 
@@ -36,10 +33,7 @@ function leaveRoom(ws) {
 
   if (room) {
     room.delete(ws)
-
-    if (room.size === 0) {
-      rooms.delete(ws.roomId)
-    }
+    if (room.size === 0) rooms.delete(ws.roomId)
   }
 
   ws.roomId = null
@@ -49,15 +43,13 @@ function joinRoom(ws, roomId) {
   leaveRoom(ws)
 
   ws.roomId = roomId
-
-  const room = getRoom(roomId)
-  room.add(ws)
+  getRoom(roomId).add(ws)
 
   sendJson(ws, {
     type: 'joined'
   })
 
-  console.log(`[join] encrypted room joined; roomSize=${room.size}`)
+  console.log(`[join] encrypted-room=${roomId.slice(0, 12)}...`)
 }
 
 function broadcast(roomId, payload, sender) {
@@ -76,10 +68,7 @@ function handleClientMessage(ws, raw) {
   try {
     msg = JSON.parse(raw.toString())
   } catch {
-    sendJson(ws, {
-      type: 'error',
-      message: 'Invalid JSON'
-    })
+    sendJson(ws, { type: 'error', message: 'Invalid JSON' })
     return
   }
 
@@ -87,10 +76,7 @@ function handleClientMessage(ws, raw) {
     const roomId = String(msg.roomId || '').trim()
 
     if (!roomId) {
-      sendJson(ws, {
-        type: 'error',
-        message: 'Missing roomId'
-      })
+      sendJson(ws, { type: 'error', message: 'Missing roomId' })
       return
     }
 
@@ -100,47 +86,31 @@ function handleClientMessage(ws, raw) {
 
   if (msg.type === 'message') {
     if (!ws.roomId) {
-      sendJson(ws, {
-        type: 'error',
-        message: 'Join a room before sending messages'
-      })
+      sendJson(ws, { type: 'error', message: 'Join a room before sending messages' })
       return
     }
 
     if (!msg.payload || typeof msg.payload !== 'object') {
-      sendJson(ws, {
-        type: 'error',
-        message: 'Missing encrypted payload'
-      })
+      sendJson(ws, { type: 'error', message: 'Missing encrypted payload' })
       return
     }
 
-    broadcast(
-      ws.roomId,
-      {
-        type: 'message',
-        messageId: msg.messageId || randomUUID(),
-        payload: msg.payload,
-        createdAt: Date.now()
-      },
-      ws
-    )
+    broadcast(ws.roomId, {
+      type: 'message',
+      messageId: msg.messageId || randomUUID(),
+      payload: msg.payload,
+      createdAt: Date.now()
+    }, ws)
 
     return
   }
 
   if (msg.type === 'ping') {
-    sendJson(ws, {
-      type: 'pong',
-      time: Date.now()
-    })
+    sendJson(ws, { type: 'pong', time: Date.now() })
     return
   }
 
-  sendJson(ws, {
-    type: 'error',
-    message: 'Unknown message type'
-  })
+  sendJson(ws, { type: 'error', message: 'Unknown message type' })
 }
 
 const httpServer = http.createServer((req, res) => {
@@ -157,18 +127,12 @@ const httpServer = http.createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`)
 
   if (req.method === 'GET' && url.pathname === '/health') {
-    res.writeHead(200, {
-      'Content-Type': 'application/json'
-    })
-
-    res.end(
-      JSON.stringify({
-        ok: true,
-        mode: 'encrypted-websocket-hub',
-        rooms: rooms.size
-      })
-    )
-
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      ok: true,
+      mode: 'encrypted-websocket-hub',
+      rooms: rooms.size
+    }))
     return
   }
 
@@ -180,11 +144,7 @@ const wss = new WebSocketServer({
   server: httpServer,
   maxPayload: 128 * 1024,
   verifyClient: ({ origin }, done) => {
-    if (isOriginAllowed(origin)) {
-      done(true)
-      return
-    }
-
+    if (isOriginAllowed(origin)) return done(true)
     done(false, 403, 'Forbidden origin')
   }
 })
@@ -197,17 +157,9 @@ wss.on('connection', (ws, req) => {
     ws.isAlive = true
   })
 
-  ws.on('message', raw => {
-    handleClientMessage(ws, raw)
-  })
-
-  ws.on('close', () => {
-    leaveRoom(ws)
-  })
-
-  ws.on('error', () => {
-    leaveRoom(ws)
-  })
+  ws.on('message', raw => handleClientMessage(ws, raw))
+  ws.on('close', () => leaveRoom(ws))
+  ws.on('error', () => leaveRoom(ws))
 
   console.log(`[ws] connected from ${req.socket.remoteAddress}`)
 })
