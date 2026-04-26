@@ -1,6 +1,7 @@
 // WebSocket hub client.
 // Browsers connect only to Railway relay.
 // No browser-to-browser libp2p dialing.
+// UI does not show peer/client IDs anywhere.
 
 if (!sessionStorage.getItem('authToken')) {
   window.location.href = '/index.html'
@@ -19,6 +20,7 @@ const $output = () => document.getElementById('output')
 const $peerList = () => document.getElementById('topic-peers')
 const $curTopic = () => document.getElementById('current-topic')
 const $peerId = () => document.getElementById('peer-id')
+const $charCount = () => document.getElementById('char-count')
 
 function log(text, type = 'info') {
   if (window.addLog) {
@@ -48,15 +50,11 @@ function setStatus(state, text) {
 }
 
 function makeClientId() {
-  const existing = sessionStorage.getItem('hubClientId')
-  if (existing) return existing
-
-  const id = crypto.randomUUID
+  // New hidden client ID every page/login session.
+  // It is required internally by the relay but never shown in UI.
+  return crypto.randomUUID
     ? crypto.randomUUID()
     : `client-${Date.now()}-${Math.random().toString(16).slice(2)}`
-
-  sessionStorage.setItem('hubClientId', id)
-  return id
 }
 
 function makeMessageId() {
@@ -76,22 +74,31 @@ function setInputEnabled(enabled) {
   }
 }
 
-function renderPeers(peers = []) {
+function getMemberCount(input) {
+  if (typeof input === 'number') return input
+
+  if (Array.isArray(input)) {
+    return Math.max(input.length, 1)
+  }
+
+  return 1
+}
+
+function renderPeers(input = []) {
   const list = $peerList()
   if (!list) return
 
-  const others = peers.filter(peer => peer.clientId !== myClientId)
+  const count = getMemberCount(input)
 
-  if (others.length === 0) {
-    list.innerHTML = '<li class="empty">Only you are connected</li>'
-    return
-  }
-
-  list.replaceChildren(...others.map(peer => {
-    const li = document.createElement('li')
-    li.innerHTML = `<span class="peer-dot"></span>${peer.clientId.slice(0, 8)}…${peer.clientId.slice(-4)}`
-    return li
-  }))
+  list.innerHTML = `
+    <li class="member-count-card">
+      <span class="member-count">${count}</span>
+      <span class="member-copy">
+        <strong>${count === 1 ? 'active member' : 'active members'}</strong>
+        <small>IDs hidden</small>
+      </span>
+    </li>
+  `
 }
 
 async function loadHistory(topic) {
@@ -106,7 +113,7 @@ async function loadHistory(topic) {
 
     history.forEach(m => {
       const isMe = m.peerId === myClientId
-      log(`${isMe ? 'You' : 'Peer'}: ${m.message}`, isMe ? 'sent' : 'received')
+      log(`${isMe ? 'You' : 'Member'}: ${m.message}`, isMe ? 'sent' : 'received')
     })
   } catch {
     // Optional history.
@@ -129,14 +136,15 @@ function saveMessage(topic, message) {
 
 const myClientId = makeClientId()
 
-if (window.setPeerId) window.setPeerId(myClientId)
-else if ($peerId()) $peerId().textContent = myClientId
+if (window.setPeerId) window.setPeerId('Hidden')
+else if ($peerId()) $peerId().textContent = 'Hidden'
 
 let socket = null
 let currentTopic = null
 let manuallyClosed = false
 let reconnectTimer = null
 let reconnectAttempt = 0
+
 const seenMessages = new Set()
 
 function resetUI() {
@@ -161,14 +169,16 @@ function resetUI() {
   $topic().disabled = false
   $topic().value = ''
   $msgInput().value = ''
+
   setInputEnabled(false)
 
-  const cc = document.getElementById('char-count')
-  if (cc) cc.textContent = '0 / 500'
-
+  if ($charCount()) $charCount().textContent = '0 / 500'
   if ($endBtn()) $endBtn().style.display = 'none'
   if ($curTopic()) $curTopic().textContent = '—'
-  if ($peerList()) $peerList().innerHTML = '<li class="empty">Subscribe first</li>'
+
+  if ($peerList()) {
+    $peerList().innerHTML = '<li class="empty">Connect to see active members</li>'
+  }
 
   setStatus('idle', 'Idle — enter a topic to connect')
 }
@@ -208,24 +218,22 @@ function connectHub(topic) {
     }
 
     if (msg.type === 'joined') {
-      setStatus('connected', `Connected — topic: ${msg.topic}`)
-      renderPeers(msg.peers || [])
+      setStatus('connected', `Connected — ${msg.topic}`)
+      renderPeers(msg.memberCount ?? msg.peers ?? 1)
       setInputEnabled(true)
-      log(`Joined channel "${msg.topic}" through relay hub.`, 'success')
+      log(`Joined topic "${msg.topic}".`, 'success')
       return
     }
 
     if (msg.type === 'peer-joined') {
-      renderPeers(msg.peers || [])
-      if (msg.clientId !== myClientId) {
-        log(`Client joined: ${msg.clientId.slice(0, 8)}…`, 'info')
-      }
+      renderPeers(msg.memberCount ?? msg.peers ?? 1)
+      log('A member joined the topic.', 'info')
       return
     }
 
     if (msg.type === 'peer-left') {
-      renderPeers(msg.peers || [])
-      log(`Client left: ${msg.clientId.slice(0, 8)}…`, 'info')
+      renderPeers(msg.memberCount ?? msg.peers ?? 1)
+      log('A member left the topic.', 'info')
       return
     }
 
@@ -234,7 +242,7 @@ function connectHub(topic) {
       if (seenMessages.has(msg.messageId)) return
 
       seenMessages.add(msg.messageId)
-      log(`Peer: ${msg.text}`, 'received')
+      log(`Member: ${msg.text}`, 'received')
       return
     }
 
@@ -285,7 +293,7 @@ if ($endBtn()) {
   $endBtn().style.display = 'none'
 
   $endBtn().addEventListener('click', () => {
-    log('Disconnected from channel.', 'info')
+    log('Disconnected from topic.', 'info')
     resetUI()
   })
 }
@@ -318,8 +326,7 @@ async function sendMessage() {
 
     $msgInput().value = ''
 
-    const cc = document.getElementById('char-count')
-    if (cc) cc.textContent = '0 / 500'
+    if ($charCount()) $charCount().textContent = '0 / 500'
   } catch (err) {
     console.error('[send error]', err)
     log(`Send failed: ${err.message}`, 'error')
@@ -332,6 +339,12 @@ $msgInput().addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
     sendMessage()
+  }
+})
+
+$msgInput().addEventListener('input', () => {
+  if ($charCount()) {
+    $charCount().textContent = `${$msgInput().value.length} / 500`
   }
 })
 
