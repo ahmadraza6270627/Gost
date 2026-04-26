@@ -443,67 +443,245 @@
     }
 
     @media (max-width: 900px) {
+      html,
       body {
-        overflow: auto;
+        height: 100%;
+        overflow: hidden;
       }
 
-      main {
-        grid-template-columns: 1fr;
-        height: auto;
-        min-height: calc(100vh - 70px);
+      body {
+        min-height: 100dvh;
       }
 
-      aside {
-        order: -1;
-      }
-
-      .chat {
-        min-height: 70vh;
-      }
-    }
-
-    @media (max-width: 620px) {
       header {
-        height: auto;
-        min-height: 66px;
-        gap: 12px;
-        align-items: flex-start;
-        flex-direction: column;
-        padding-top: 14px;
-        padding-bottom: 14px;
+        height: 58px;
+        min-height: 58px;
+        padding: 0 12px;
+        flex-direction: row;
+        align-items: center;
+      }
+
+      .brand-mark {
+        width: 32px;
+        height: 32px;
+        border-radius: 10px;
+      }
+
+      .brand {
+        font-size: 14px;
+      }
+
+      .brand-sub {
+        display: none;
       }
 
       .status {
-        width: 100%;
+        justify-content: flex-end;
+        font-size: 11px;
+        max-width: 52%;
+        text-align: right;
+      }
+
+      #status-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       main {
+        height: calc(100dvh - 58px);
+        min-height: 0;
+        padding: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        overflow: hidden;
+      }
+
+      aside {
+        order: 0;
+        flex: 0 0 auto;
         padding: 10px;
-        gap: 10px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        max-height: 98px;
+        overflow: hidden;
+      }
+
+      aside .side-section {
+        margin: 0;
+        min-width: 0;
+      }
+
+      aside .side-section:nth-of-type(2),
+      aside .meta {
+        display: none;
+      }
+
+      .side-title {
+        font-size: 9px;
+        margin-bottom: 5px;
+      }
+
+      .chip {
+        padding: 8px;
+        font-size: 11px;
+        border-radius: 10px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      #topic-peers li {
+        padding: 0;
+      }
+
+      .member-count-card {
+        padding: 8px !important;
+        border-radius: 10px;
+        gap: 8px;
+      }
+
+      .member-count {
+        width: 28px;
+        height: 28px;
+        font-size: 14px;
+      }
+
+      .member-copy strong {
+        font-size: 11px;
+      }
+
+      .member-copy small {
+        display: none;
+      }
+
+      .chat {
+        order: 1;
+        flex: 1 1 auto;
+        min-height: 0;
+        height: auto;
       }
 
       .topic-bar {
-        grid-template-columns: 1fr;
+        flex: 0 0 auto;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        padding: 10px;
+      }
+
+      #topic-input {
+        grid-column: 1 / -1;
+      }
+
+      #subscribe-button,
+      #end-button {
+        min-height: 38px;
+        height: 38px;
+        padding: 0 12px;
+      }
+
+      #subscribe-button {
+        grid-column: 1;
+      }
+
+      #end-button {
+        grid-column: 2;
+      }
+
+      #output {
+        flex: 1 1 auto;
+        min-height: 0;
+        padding: 10px;
+        font-size: 12px;
+        overflow-y: auto;
+      }
+
+      .log-line {
+        max-width: 96%;
+        padding: 8px 10px;
+        margin-bottom: 8px;
+        border-radius: 11px;
+      }
+
+      .message-wrap {
+        flex: 0 0 auto;
       }
 
       .message-bar {
-        grid-template-columns: 1fr;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        padding: 10px;
       }
 
-      button {
-        width: 100%;
+      #message-input {
+        min-height: 40px;
+      }
+
+      #send-button {
+        min-height: 40px;
+        height: 40px;
+        padding: 0 14px;
+      }
+
+      .input-meta {
+        padding: 0 12px 8px;
+        font-size: 10px;
+      }
+
+      .input-meta span:first-child {
+        display: none;
       }
 
       .panel {
         border-radius: 14px;
       }
+    }
 
-      #output {
-        padding: 12px;
+    @media (max-width: 480px) {
+      header {
+        height: 54px;
+        min-height: 54px;
       }
 
-      .log-line {
-        max-width: 96%;
+      main {
+        height: calc(100dvh - 54px);
+        padding: 6px;
+        gap: 6px;
+      }
+
+      aside {
+        max-height: 86px;
+        padding: 8px;
+      }
+
+      .topic-bar {
+        padding: 8px;
+      }
+
+      input {
+        padding: 10px 11px;
+        font-size: 14px;
+      }
+
+      button {
+        font-size: 13px;
+      }
+
+      #output {
+        padding: 8px;
+        font-size: 11.5px;
+      }
+
+      .message-bar {
+        padding: 8px;
+      }
+
+      .log-time {
+        display: none;
       }
     }
   </style>
