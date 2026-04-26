@@ -230,6 +230,32 @@
       color: #ffd6da;
     }
 
+    #voice-button {
+      width: 48px;
+      padding: 0;
+      background: rgba(0, 220, 192, 0.12);
+      border: 1px solid rgba(0, 220, 192, 0.26);
+      color: var(--accent);
+      font-size: 18px;
+    }
+
+    #voice-button.recording {
+      background: rgba(255, 85, 102, 0.16);
+      border-color: rgba(255, 85, 102, 0.42);
+      color: #ffd6da;
+      animation: pulseRecord 1s infinite;
+    }
+
+    @keyframes pulseRecord {
+      0%, 100% {
+        box-shadow: 0 0 0 rgba(255, 85, 102, 0);
+      }
+
+      50% {
+        box-shadow: 0 0 18px rgba(255, 85, 102, 0.32);
+      }
+    }
+
     #output {
       flex: 1;
       overflow-y: auto;
@@ -293,6 +319,24 @@
       border-color: rgba(255, 170, 68, 0.25);
     }
 
+    .voice-note {
+      min-width: min(340px, 90%);
+    }
+
+    .voice-label {
+      margin-bottom: 8px;
+      font-family: var(--sans);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .voice-note audio {
+      width: 100%;
+      max-width: 320px;
+      height: 34px;
+      display: block;
+    }
+
     .message-wrap {
       border-top: 1px solid var(--border);
       background: rgba(3, 14, 20, 0.42);
@@ -300,7 +344,7 @@
 
     .message-bar {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr) auto auto;
       gap: 10px;
       padding: 14px;
     }
@@ -612,13 +656,19 @@
 
       .message-bar {
         display: grid;
-        grid-template-columns: 1fr auto;
+        grid-template-columns: 1fr auto auto;
         gap: 8px;
         padding: 10px;
       }
 
       #message-input {
         min-height: 40px;
+      }
+
+      #voice-button {
+        width: 42px;
+        min-height: 40px;
+        height: 40px;
       }
 
       #send-button {
@@ -680,6 +730,14 @@
         padding: 8px;
       }
 
+      .voice-note {
+        min-width: 96%;
+      }
+
+      .voice-note audio {
+        max-width: 100%;
+      }
+
       .log-time {
         display: none;
       }
@@ -721,10 +779,11 @@
       <div class="message-wrap">
         <div class="message-bar">
           <input id="message-input" placeholder="Type message..." disabled maxlength="500" autocomplete="off" />
+          <button id="voice-button" disabled title="Record voice note">🎙</button>
           <button id="send-button" disabled>Send</button>
         </div>
         <div class="input-meta">
-          <span>Sender identity hidden in interface</span>
+          <span>Tap mic to record up to 30 seconds</span>
           <span id="char-count">0 / 500</span>
         </div>
       </div>
@@ -757,6 +816,7 @@
       <div class="meta">
         Mode: WebSocket Relay Hub<br />
         Transport: WSS/TLS<br />
+        Voice notes: enabled<br />
         Peer IDs: hidden in UI<br />
         P2P dialing: disabled
       </div>

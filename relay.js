@@ -4,6 +4,8 @@ import { WebSocketServer, WebSocket } from 'ws'
 
 const RELAY_HOST = process.env.RELAY_HOST || '0.0.0.0'
 const PORT = Number(process.env.PORT || 8080)
+const MAX_VOICE_BASE64_CHARS = 1_700_000
+
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '*')
   .split(',')
   .map(origin => origin.trim())
@@ -25,14 +27,9 @@ function getRoom(topic) {
   return rooms.get(topic)
 }
 
-function getRoster(topic) {
+function getMemberCount(topic) {
   const room = rooms.get(topic)
-  if (!room) return []
-
-  return [...room.values()].map(client => ({
-    clientId: client.clientId,
-    joinedAt: client.joinedAt
-  }))
+  return room ? room.size : 0
 }
 
 function broadcast(topic, payload, excludeWs = null) {
@@ -61,8 +58,7 @@ function leaveRoom(ws) {
       broadcast(topic, {
         type: 'peer-left',
         topic,
-        clientId,
-        peers: getRoster(topic)
+        memberCount: getMemberCount(topic)
       })
     }
   }
@@ -92,23 +88,21 @@ function joinRoom(ws, topic, clientId) {
     joinedAt: Date.now()
   })
 
-  const peers = getRoster(topic)
+  const memberCount = getMemberCount(topic)
 
   sendJson(ws, {
     type: 'joined',
     topic,
-    clientId,
-    peers
+    memberCount
   })
 
   broadcast(topic, {
     type: 'peer-joined',
     topic,
-    clientId,
-    peers
+    memberCount
   }, ws)
 
-  console.log(`[join] topic="${topic}" client=${clientId} roomSize=${room.size}`)
+  console.log(`[join] topic="${topic}" roomSize=${room.size}`)
 }
 
 function handleClientMessage(ws, raw) {
@@ -143,16 +137,47 @@ function handleClientMessage(ws, raw) {
     const text = String(msg.text || '').trim()
     if (!text) return
 
-    const payload = {
+    broadcast(ws.topic, {
       type: 'message',
       topic: ws.topic,
       messageId: msg.messageId || randomUUID(),
-      from: ws.clientId,
       text,
       createdAt: Date.now()
+    }, ws)
+
+    return
+  }
+
+  if (msg.type === 'voice') {
+    if (!ws.topic || !ws.clientId) {
+      sendJson(ws, { type: 'error', message: 'Join a topic before sending voice notes' })
+      return
     }
 
-    broadcast(ws.topic, payload, ws)
+    const audio = String(msg.audio || '')
+    const mimeType = String(msg.mimeType || 'audio/webm')
+    const durationMs = Number(msg.durationMs || 0)
+
+    if (!audio || !mimeType.startsWith('audio/')) {
+      sendJson(ws, { type: 'error', message: 'Missing voice payload' })
+      return
+    }
+
+    if (audio.length > MAX_VOICE_BASE64_CHARS) {
+      sendJson(ws, { type: 'error', message: 'Voice note is too large' })
+      return
+    }
+
+    broadcast(ws.topic, {
+      type: 'voice',
+      topic: ws.topic,
+      messageId: msg.messageId || randomUUID(),
+      audio,
+      mimeType,
+      durationMs,
+      createdAt: Date.now()
+    }, ws)
+
     return
   }
 
@@ -182,7 +207,8 @@ const httpServer = http.createServer((req, res) => {
     res.end(JSON.stringify({
       ok: true,
       mode: 'websocket-hub',
-      rooms: rooms.size
+      rooms: rooms.size,
+      voiceNotes: true
     }))
     return
   }
@@ -190,8 +216,7 @@ const httpServer = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/rooms') {
     const data = [...rooms.entries()].map(([topic, clients]) => ({
       topic,
-      count: clients.size,
-      peers: getRoster(topic)
+      count: clients.size
     }))
 
     res.writeHead(200, { 'Content-Type': 'application/json' })
@@ -205,7 +230,7 @@ const httpServer = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({
   server: httpServer,
-  maxPayload: 64 * 1024,
+  maxPayload: 2 * 1024 * 1024,
   verifyClient: ({ origin }, done) => {
     if (isOriginAllowed(origin)) return done(true)
     done(false, 403, 'Forbidden origin')
