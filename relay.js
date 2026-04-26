@@ -4,6 +4,7 @@ import { WebSocketServer, WebSocket } from 'ws'
 
 const RELAY_HOST = process.env.RELAY_HOST || '0.0.0.0'
 const PORT = Number(process.env.PORT || 8080)
+
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '*')
   .split(',')
   .map(origin => origin.trim())
@@ -20,95 +21,53 @@ function sendJson(ws, payload) {
   ws.send(JSON.stringify(payload))
 }
 
-function getRoom(topic) {
-  if (!rooms.has(topic)) rooms.set(topic, new Map())
-  return rooms.get(topic)
-}
-
-function getRoster(topic) {
-  const room = rooms.get(topic)
-  if (!room) return []
-
-  return [...room.values()].map(client => ({
-    clientId: client.clientId,
-    joinedAt: client.joinedAt
-  }))
-}
-
-function broadcast(topic, payload, excludeWs = null) {
-  const room = rooms.get(topic)
-  if (!room) return
-
-  for (const client of room.values()) {
-    if (client.ws === excludeWs) continue
-    sendJson(client.ws, payload)
+function getRoom(roomId) {
+  if (!rooms.has(roomId)) {
+    rooms.set(roomId, new Set())
   }
+
+  return rooms.get(roomId)
 }
 
 function leaveRoom(ws) {
-  if (!ws.topic || !ws.clientId) return
+  if (!ws.roomId) return
 
-  const topic = ws.topic
-  const clientId = ws.clientId
-  const room = rooms.get(topic)
+  const room = rooms.get(ws.roomId)
 
   if (room) {
-    room.delete(clientId)
+    room.delete(ws)
 
     if (room.size === 0) {
-      rooms.delete(topic)
-    } else {
-      broadcast(topic, {
-        type: 'peer-left',
-        topic,
-        clientId,
-        peers: getRoster(topic)
-      })
+      rooms.delete(ws.roomId)
     }
   }
 
-  ws.topic = null
-  ws.clientId = null
+  ws.roomId = null
 }
 
-function joinRoom(ws, topic, clientId) {
+function joinRoom(ws, roomId) {
   leaveRoom(ws)
 
-  const room = getRoom(topic)
-  const existing = room.get(clientId)
+  ws.roomId = roomId
 
-  if (existing && existing.ws !== ws) {
-    try {
-      existing.ws.close(4000, 'duplicate client')
-    } catch {}
-  }
-
-  ws.topic = topic
-  ws.clientId = clientId
-
-  room.set(clientId, {
-    ws,
-    clientId,
-    joinedAt: Date.now()
-  })
-
-  const peers = getRoster(topic)
+  const room = getRoom(roomId)
+  room.add(ws)
 
   sendJson(ws, {
-    type: 'joined',
-    topic,
-    clientId,
-    peers
+    type: 'joined'
   })
 
-  broadcast(topic, {
-    type: 'peer-joined',
-    topic,
-    clientId,
-    peers
-  }, ws)
+  console.log(`[join] encrypted room joined; roomSize=${room.size}`)
+}
 
-  console.log(`[join] topic="${topic}" client=${clientId} roomSize=${room.size}`)
+function broadcast(roomId, payload, sender) {
+  const room = rooms.get(roomId)
+  if (!room) return
+
+  for (const client of room) {
+    if (client === sender) continue
+    sendJson(client, payload)
+  }
 }
 
 function handleClientMessage(ws, raw) {
@@ -117,51 +76,71 @@ function handleClientMessage(ws, raw) {
   try {
     msg = JSON.parse(raw.toString())
   } catch {
-    sendJson(ws, { type: 'error', message: 'Invalid JSON' })
+    sendJson(ws, {
+      type: 'error',
+      message: 'Invalid JSON'
+    })
     return
   }
 
   if (msg.type === 'join') {
-    const topic = String(msg.topic || '').trim()
-    const clientId = String(msg.clientId || '').trim()
+    const roomId = String(msg.roomId || '').trim()
 
-    if (!topic || !clientId) {
-      sendJson(ws, { type: 'error', message: 'Missing topic or clientId' })
+    if (!roomId) {
+      sendJson(ws, {
+        type: 'error',
+        message: 'Missing roomId'
+      })
       return
     }
 
-    joinRoom(ws, topic, clientId)
+    joinRoom(ws, roomId)
     return
   }
 
   if (msg.type === 'message') {
-    if (!ws.topic || !ws.clientId) {
-      sendJson(ws, { type: 'error', message: 'Join a topic before sending messages' })
+    if (!ws.roomId) {
+      sendJson(ws, {
+        type: 'error',
+        message: 'Join a room before sending messages'
+      })
       return
     }
 
-    const text = String(msg.text || '').trim()
-    if (!text) return
-
-    const payload = {
-      type: 'message',
-      topic: ws.topic,
-      messageId: msg.messageId || randomUUID(),
-      from: ws.clientId,
-      text,
-      createdAt: Date.now()
+    if (!msg.payload || typeof msg.payload !== 'object') {
+      sendJson(ws, {
+        type: 'error',
+        message: 'Missing encrypted payload'
+      })
+      return
     }
 
-    broadcast(ws.topic, payload, ws)
+    broadcast(
+      ws.roomId,
+      {
+        type: 'message',
+        messageId: msg.messageId || randomUUID(),
+        payload: msg.payload,
+        createdAt: Date.now()
+      },
+      ws
+    )
+
     return
   }
 
   if (msg.type === 'ping') {
-    sendJson(ws, { type: 'pong', time: Date.now() })
+    sendJson(ws, {
+      type: 'pong',
+      time: Date.now()
+    })
     return
   }
 
-  sendJson(ws, { type: 'error', message: 'Unknown message type' })
+  sendJson(ws, {
+    type: 'error',
+    message: 'Unknown message type'
+  })
 }
 
 const httpServer = http.createServer((req, res) => {
@@ -178,24 +157,18 @@ const httpServer = http.createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`)
 
   if (req.method === 'GET' && url.pathname === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({
-      ok: true,
-      mode: 'websocket-hub',
-      rooms: rooms.size
-    }))
-    return
-  }
+    res.writeHead(200, {
+      'Content-Type': 'application/json'
+    })
 
-  if (req.method === 'GET' && url.pathname === '/rooms') {
-    const data = [...rooms.entries()].map(([topic, clients]) => ({
-      topic,
-      count: clients.size,
-      peers: getRoster(topic)
-    }))
+    res.end(
+      JSON.stringify({
+        ok: true,
+        mode: 'encrypted-websocket-hub',
+        rooms: rooms.size
+      })
+    )
 
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ rooms: data }))
     return
   }
 
@@ -205,23 +178,36 @@ const httpServer = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({
   server: httpServer,
-  maxPayload: 64 * 1024,
+  maxPayload: 128 * 1024,
   verifyClient: ({ origin }, done) => {
-    if (isOriginAllowed(origin)) return done(true)
+    if (isOriginAllowed(origin)) {
+      done(true)
+      return
+    }
+
     done(false, 403, 'Forbidden origin')
   }
 })
 
 wss.on('connection', (ws, req) => {
   ws.isAlive = true
+  ws.roomId = null
 
   ws.on('pong', () => {
     ws.isAlive = true
   })
 
-  ws.on('message', raw => handleClientMessage(ws, raw))
-  ws.on('close', () => leaveRoom(ws))
-  ws.on('error', () => leaveRoom(ws))
+  ws.on('message', raw => {
+    handleClientMessage(ws, raw)
+  })
+
+  ws.on('close', () => {
+    leaveRoom(ws)
+  })
+
+  ws.on('error', () => {
+    leaveRoom(ws)
+  })
 
   console.log(`[ws] connected from ${req.socket.remoteAddress}`)
 })
@@ -240,5 +226,5 @@ setInterval(() => {
 }, 30_000)
 
 httpServer.listen(PORT, RELAY_HOST, () => {
-  console.log(`WebSocket hub relay listening on ${RELAY_HOST}:${PORT}`)
+  console.log(`Encrypted WebSocket hub relay listening on ${RELAY_HOST}:${PORT}`)
 })

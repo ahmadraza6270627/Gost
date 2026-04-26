@@ -1,6 +1,9 @@
-// WebSocket hub client.
-// Browsers connect only to Railway relay.
-// No browser-to-browser libp2p dialing.
+// Encrypted WebSocket hub client.
+// Relay cannot read messages.
+// Backend does not receive messages.
+// Sender identity is not included in message payloads.
+// Topic name is hidden from relay.
+// Local session ID changes every page/login session.
 
 if (!sessionStorage.getItem('authToken')) {
   window.location.href = '/index.html'
@@ -8,7 +11,6 @@ if (!sessionStorage.getItem('authToken')) {
 }
 
 const RELAY_WS = import.meta.env.VITE_RELAY_WS_URL || 'ws://localhost:8080'
-const MESSAGES_API = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
 const $topic = () => document.getElementById('topic-input')
 const $subscribe = () => document.getElementById('subscribe-button')
@@ -20,21 +22,48 @@ const $peerList = () => document.getElementById('topic-peers')
 const $curTopic = () => document.getElementById('current-topic')
 const $peerId = () => document.getElementById('peer-id')
 
+const encoder = new TextEncoder()
+const decoder = new TextDecoder()
+
+let socket = null
+let currentTopic = null
+let encryptedRoomId = null
+let roomCryptoKey = null
+let manuallyClosed = false
+let reconnectTimer = null
+let reconnectAttempt = 0
+
+const seenMessages = new Set()
+
+const localSessionId = crypto.randomUUID
+  ? crypto.randomUUID()
+  : `session-${Date.now()}-${Math.random().toString(16).slice(2)}`
+
+if (window.setPeerId) {
+  window.setPeerId(localSessionId)
+} else if ($peerId()) {
+  $peerId().textContent = localSessionId
+}
+
 function log(text, type = 'info') {
   if (window.addLog) {
     window.addLog(text, type)
     return
   }
 
+  const output = $output()
+  if (!output) return
+
   const line = document.createElement('div')
   line.className = `log-line log-${type}`
+
   line.textContent = `${new Date().toLocaleTimeString([], {
     hour: '2-digit',
     minute: '2-digit'
   })} › ${text}`
 
-  $output().appendChild(line)
-  $output().scrollTop = $output().scrollHeight
+  output.appendChild(line)
+  output.scrollTop = output.scrollHeight
 }
 
 function setStatus(state, text) {
@@ -43,20 +72,27 @@ function setStatus(state, text) {
     return
   }
 
-  document.getElementById('status-dot').className = `s-dot dot-${state}`
-  document.getElementById('status-text').textContent = text
+  const dot = document.getElementById('status-dot')
+  const label = document.getElementById('status-text')
+
+  if (dot) dot.className = `s-dot dot-${state}`
+  if (label) label.textContent = text
 }
 
-function makeClientId() {
-  const existing = sessionStorage.getItem('hubClientId')
-  if (existing) return existing
+function setInputEnabled(enabled) {
+  const input = $msgInput()
+  const button = $sendBtn()
 
-  const id = crypto.randomUUID
-    ? crypto.randomUUID()
-    : `client-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  if (!input || !button) return
 
-  sessionStorage.setItem('hubClientId', id)
-  return id
+  input.disabled = !enabled
+  button.disabled = !enabled
+
+  if (enabled) {
+    input.removeAttribute('disabled')
+    button.removeAttribute('disabled')
+    input.focus()
+  }
 }
 
 function makeMessageId() {
@@ -65,139 +101,212 @@ function makeMessageId() {
     : `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-function setInputEnabled(enabled) {
-  $msgInput().disabled = !enabled
-  $sendBtn().disabled = !enabled
+function b64u(bytes) {
+  const arr = new Uint8Array(bytes)
+  let binary = ''
 
-  if (enabled) {
-    $msgInput().removeAttribute('disabled')
-    $sendBtn().removeAttribute('disabled')
-    $msgInput().focus()
+  for (const byte of arr) {
+    binary += String.fromCharCode(byte)
+  }
+
+  return btoa(binary)
+    .replaceAll('+', '-')
+    .replaceAll('/', '_')
+    .replaceAll('=', '')
+}
+
+function fromB64u(str) {
+  let normalized = str.replaceAll('-', '+').replaceAll('_', '/')
+
+  while (normalized.length % 4) {
+    normalized += '='
+  }
+
+  const binary = atob(normalized)
+  const bytes = new Uint8Array(binary.length)
+
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+
+  return bytes
+}
+
+async function sha256(text) {
+  return crypto.subtle.digest('SHA-256', encoder.encode(text))
+}
+
+async function deriveRoomCrypto(topic, roomKey) {
+  const salt = await sha256(`gost:e2ee:salt:${topic}`)
+
+  const baseKey = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(roomKey),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  )
+
+  const key = await crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt,
+      iterations: 150000,
+      hash: 'SHA-256'
+    },
+    baseKey,
+    {
+      name: 'AES-GCM',
+      length: 256
+    },
+    false,
+    ['encrypt', 'decrypt']
+  )
+
+  const roomHash = await sha256(`gost:e2ee:room:${topic}:${roomKey}`)
+
+  return {
+    key,
+    roomId: `room-${b64u(roomHash).slice(0, 40)}`
   }
 }
 
-function renderPeers(peers = []) {
+async function encryptText(text) {
+  if (!roomCryptoKey) {
+    throw new Error('Missing room encryption key')
+  }
+
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+
+  const encrypted = await crypto.subtle.encrypt(
+    {
+      name: 'AES-GCM',
+      iv
+    },
+    roomCryptoKey,
+    encoder.encode(text)
+  )
+
+  return {
+    v: 1,
+    alg: 'AES-GCM',
+    iv: b64u(iv),
+    ct: b64u(encrypted)
+  }
+}
+
+async function decryptText(payload) {
+  if (!roomCryptoKey) {
+    throw new Error('Missing room encryption key')
+  }
+
+  if (!payload || !payload.iv || !payload.ct) {
+    throw new Error('Invalid encrypted payload')
+  }
+
+  const iv = fromB64u(payload.iv)
+  const ciphertext = fromB64u(payload.ct)
+
+  const decrypted = await crypto.subtle.decrypt(
+    {
+      name: 'AES-GCM',
+      iv
+    },
+    roomCryptoKey,
+    ciphertext
+  )
+
+  return decoder.decode(decrypted)
+}
+
+function renderAnonymousMode() {
   const list = $peerList()
   if (!list) return
 
-  const others = peers.filter(peer => peer.clientId !== myClientId)
-
-  if (others.length === 0) {
-    list.innerHTML = '<li class="empty">Only you are connected</li>'
-    return
-  }
-
-  list.replaceChildren(...others.map(peer => {
-    const li = document.createElement('li')
-    li.innerHTML = `<span class="peer-dot"></span>${peer.clientId.slice(0, 8)}…${peer.clientId.slice(-4)}`
-    return li
-  }))
+  list.innerHTML = '<li class="empty">Anonymous encrypted mode enabled</li>'
 }
 
-async function loadHistory(topic) {
-  try {
-    const res = await fetch(`${MESSAGES_API}/messages/${encodeURIComponent(topic)}`)
-    if (!res.ok) return
-
-    const history = await res.json()
-    if (!Array.isArray(history) || history.length === 0) return
-
-    log(`── ${history.length} previous message(s) ──`, 'info')
-
-    history.forEach(m => {
-      const isMe = m.peerId === myClientId
-      log(`${isMe ? 'You' : 'Peer'}: ${m.message}`, isMe ? 'sent' : 'received')
-    })
-  } catch {
-    // Optional history.
-  }
-}
-
-function saveMessage(topic, message) {
-  fetch(`${MESSAGES_API}/messages`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      topic,
-      peerId: myClientId,
-      message
-    })
-  }).catch(() => {})
-}
-
-const myClientId = makeClientId()
-
-if (window.setPeerId) window.setPeerId(myClientId)
-else if ($peerId()) $peerId().textContent = myClientId
-
-let socket = null
-let currentTopic = null
-let manuallyClosed = false
-let reconnectTimer = null
-let reconnectAttempt = 0
-const seenMessages = new Set()
-
-function resetUI() {
-  currentTopic = null
-  manuallyClosed = true
-  reconnectAttempt = 0
-
+function clearReconnectTimer() {
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
   }
+}
 
-  if (socket) {
-    try {
-      socket.close(1000, 'manual disconnect')
-    } catch {}
-    socket = null
+function closeSocket(reason = 'manual disconnect') {
+  if (!socket) return
+
+  try {
+    socket.close(1000, reason)
+  } catch {}
+
+  socket = null
+}
+
+function resetUI() {
+  currentTopic = null
+  encryptedRoomId = null
+  roomCryptoKey = null
+  manuallyClosed = true
+  reconnectAttempt = 0
+
+  seenMessages.clear()
+  clearReconnectTimer()
+  closeSocket('manual disconnect')
+
+  const topicInput = $topic()
+  const subBtn = $subscribe()
+  const msgInput = $msgInput()
+  const endBtn = $endBtn()
+  const curTopic = $curTopic()
+  const peerList = $peerList()
+  const cc = document.getElementById('char-count')
+
+  if (subBtn) {
+    subBtn.disabled = false
+    subBtn.textContent = 'Connect'
   }
 
-  $subscribe().disabled = false
-  $subscribe().textContent = 'Connect'
-  $topic().disabled = false
-  $topic().value = ''
-  $msgInput().value = ''
+  if (topicInput) {
+    topicInput.disabled = false
+    topicInput.value = ''
+  }
+
+  if (msgInput) {
+    msgInput.value = ''
+  }
+
   setInputEnabled(false)
 
-  const cc = document.getElementById('char-count')
   if (cc) cc.textContent = '0 / 500'
-
-  if ($endBtn()) $endBtn().style.display = 'none'
-  if ($curTopic()) $curTopic().textContent = '—'
-  if ($peerList()) $peerList().innerHTML = '<li class="empty">Subscribe first</li>'
+  if (endBtn) endBtn.style.display = 'none'
+  if (curTopic) curTopic.textContent = '—'
+  if (peerList) peerList.innerHTML = '<li class="empty">Subscribe first</li>'
 
   setStatus('idle', 'Idle — enter a topic to connect')
 }
 
-function connectHub(topic) {
+function connectHub(roomId) {
   manuallyClosed = false
-  currentTopic = topic
 
-  if (socket) {
-    try {
-      socket.close(1000, 'switch topic')
-    } catch {}
-  }
+  closeSocket('switch encrypted room')
 
-  setStatus('connecting', 'Connecting to relay hub…')
+  setStatus('connecting', 'Connecting to encrypted relay…')
 
   socket = new WebSocket(RELAY_WS)
 
   socket.addEventListener('open', () => {
     reconnectAttempt = 0
 
-    socket.send(JSON.stringify({
-      type: 'join',
-      topic,
-      clientId: myClientId
-    }))
+    socket.send(
+      JSON.stringify({
+        type: 'join',
+        roomId
+      })
+    )
   })
 
-  socket.addEventListener('message', event => {
+  socket.addEventListener('message', async event => {
     let msg
 
     try {
@@ -208,54 +317,49 @@ function connectHub(topic) {
     }
 
     if (msg.type === 'joined') {
-      setStatus('connected', `Connected — topic: ${msg.topic}`)
-      renderPeers(msg.peers || [])
+      setStatus('connected', 'Encrypted room connected')
       setInputEnabled(true)
-      log(`Joined channel "${msg.topic}" through relay hub.`, 'success')
-      return
-    }
-
-    if (msg.type === 'peer-joined') {
-      renderPeers(msg.peers || [])
-      if (msg.clientId !== myClientId) {
-        log(`Client joined: ${msg.clientId.slice(0, 8)}…`, 'info')
-      }
-      return
-    }
-
-    if (msg.type === 'peer-left') {
-      renderPeers(msg.peers || [])
-      log(`Client left: ${msg.clientId.slice(0, 8)}…`, 'info')
+      renderAnonymousMode()
+      log('End-to-end encrypted room joined.', 'success')
       return
     }
 
     if (msg.type === 'message') {
-      if (msg.topic !== currentTopic) return
       if (seenMessages.has(msg.messageId)) return
 
       seenMessages.add(msg.messageId)
-      log(`Peer: ${msg.text}`, 'received')
+
+      try {
+        const plaintext = await decryptText(msg.payload)
+        log(`Anonymous: ${plaintext}`, 'received')
+      } catch {
+        log('Could not decrypt message. Wrong room key.', 'warn')
+      }
+
       return
     }
 
     if (msg.type === 'error') {
       log(`Relay error: ${msg.message}`, 'error')
+      return
     }
   })
 
   socket.addEventListener('close', () => {
     setInputEnabled(false)
 
-    if (manuallyClosed || !currentTopic) return
+    if (manuallyClosed || !encryptedRoomId) return
 
     setStatus('waiting', 'Relay disconnected — reconnecting…')
 
     const delay = Math.min(5000, 500 * 2 ** reconnectAttempt)
     reconnectAttempt += 1
 
+    clearReconnectTimer()
+
     reconnectTimer = setTimeout(() => {
-      if (currentTopic && !manuallyClosed) {
-        connectHub(currentTopic)
+      if (encryptedRoomId && !manuallyClosed) {
+        connectHub(encryptedRoomId)
       }
     }, delay)
   })
@@ -265,58 +369,81 @@ function connectHub(topic) {
   })
 }
 
-$subscribe().addEventListener('click', async () => {
-  const topic = $topic().value.trim()
+async function startEncryptedRoom() {
+  const topicInput = $topic()
+  const subBtn = $subscribe()
+  const endBtn = $endBtn()
+  const curTopic = $curTopic()
+
+  if (!topicInput || !subBtn) return
+
+  const topic = topicInput.value.trim()
   if (!topic) return
 
-  $subscribe().disabled = true
-  $topic().disabled = true
-  currentTopic = topic
-  seenMessages.clear()
+  const roomKey = prompt('Enter room encryption key')
 
-  if ($curTopic()) $curTopic().textContent = topic
-  if ($endBtn()) $endBtn().style.display = 'inline-flex'
+  if (!roomKey || roomKey.length < 8) {
+    log('Room key must be at least 8 characters.', 'warn')
+    return
+  }
 
-  connectHub(topic)
-  await loadHistory(topic)
-})
+  try {
+    setStatus('connecting', 'Creating encrypted room…')
 
-if ($endBtn()) {
-  $endBtn().style.display = 'none'
+    const derived = await deriveRoomCrypto(topic, roomKey)
 
-  $endBtn().addEventListener('click', () => {
-    log('Disconnected from channel.', 'info')
+    currentTopic = topic
+    encryptedRoomId = derived.roomId
+    roomCryptoKey = derived.key
+
+    seenMessages.clear()
+
+    subBtn.disabled = true
+    topicInput.disabled = true
+
+    if (curTopic) curTopic.textContent = topic
+    if (endBtn) endBtn.style.display = 'inline-flex'
+
+    connectHub(encryptedRoomId)
+
+    log('E2EE enabled. Relay cannot read messages.', 'success')
+  } catch (err) {
+    console.error('[crypto setup error]', err)
+    log(`Encryption setup failed: ${err.message}`, 'error')
     resetUI()
-  })
+  }
 }
 
 async function sendMessage() {
-  const topic = currentTopic
-  const message = $msgInput().value.trim()
+  const input = $msgInput()
+  if (!input) return
 
-  if (!topic || !message) return
+  const message = input.value.trim()
+
+  if (!currentTopic || !encryptedRoomId || !message) return
 
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     log('Relay is not connected yet.', 'warn')
     return
   }
 
-  const messageId = makeMessageId()
-
   try {
-    socket.send(JSON.stringify({
-      type: 'message',
-      topic,
-      clientId: myClientId,
-      messageId,
-      text: message
-    }))
+    const messageId = makeMessageId()
+    const payload = await encryptText(message)
+
+    socket.send(
+      JSON.stringify({
+        type: 'message',
+        messageId,
+        payload
+      })
+    )
 
     seenMessages.add(messageId)
-    log(`You: ${message}`, 'sent')
-    saveMessage(topic, message)
 
-    $msgInput().value = ''
+    log(`You: ${message}`, 'sent')
+
+    input.value = ''
 
     const cc = document.getElementById('char-count')
     if (cc) cc.textContent = '0 / 500'
@@ -326,13 +453,51 @@ async function sendMessage() {
   }
 }
 
-$sendBtn().addEventListener('click', sendMessage)
+function bindEvents() {
+  const subBtn = $subscribe()
+  const endBtn = $endBtn()
+  const sendBtn = $sendBtn()
+  const msgInput = $msgInput()
 
-$msgInput().addEventListener('keydown', event => {
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault()
-    sendMessage()
+  if (subBtn) {
+    subBtn.addEventListener('click', startEncryptedRoom)
   }
-})
 
+  if (endBtn) {
+    endBtn.style.display = 'none'
+
+    endBtn.addEventListener('click', () => {
+      log('Disconnected from encrypted room.', 'info')
+      resetUI()
+    })
+  }
+
+  if (sendBtn) {
+    sendBtn.addEventListener('click', sendMessage)
+  }
+
+  if (msgInput) {
+    msgInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault()
+        sendMessage()
+      }
+    })
+
+    msgInput.addEventListener('input', () => {
+      const cc = document.getElementById('char-count')
+      if (cc) {
+        cc.textContent = `${msgInput.value.length} / 500`
+      }
+    })
+  }
+
+  window.addEventListener('beforeunload', () => {
+    manuallyClosed = true
+    closeSocket('page unload')
+  })
+}
+
+bindEvents()
+setInputEnabled(false)
 setStatus('idle', 'Idle — enter a topic to connect')
