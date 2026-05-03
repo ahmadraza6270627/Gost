@@ -879,7 +879,7 @@
       outputEl.scrollTop = outputEl.scrollHeight
     }
 
-    window.setStatus = function (state, msg) {
+    window.setStatus = function (msg, state) {
       document.getElementById('status-text').textContent = msg
       document.getElementById('status-dot').className = 's-dot dot-' + (state || 'idle')
     }
