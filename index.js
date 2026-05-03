@@ -13,6 +13,11 @@ if (!sessionStorage.getItem('authToken')) {
 const RELAY_WS = import.meta.env.VITE_RELAY_WS_URL || 'ws://localhost:8080';
 const MESSAGES_API = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
+console.log('[Gost config]', {
+  RELAY_WS,
+  MESSAGES_API
+});
+
 const MAX_VOICE_MS = 30_000;
 const MAX_VOICE_BYTES = 1_200_000;
 
@@ -47,7 +52,7 @@ function log(text, type = 'info') {
 
 function setStatus(state, text) {
   if (window.setStatus) {
-    window.setStatus(state, text);
+    window.setStatus(text, state);
     return;
   }
 
